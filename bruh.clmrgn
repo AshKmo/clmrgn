@@ -1,0 +1,21 @@
+function factorial x {
+	if (x = 0) {
+		return 1;
+	};
+
+	return (x * factorial (x - 1));
+};
+
+class bruh {
+	int x 3;
+	string y "";
+	int z ?;
+
+	function cringe {
+		set (this x) 4.2;
+	};
+
+	function kek {
+		set (this y) "hee hee \" hee haw";
+	};
+};
