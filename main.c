@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
@@ -26,11 +27,6 @@ Stack* Stack_pop(Stack *s) {
 	s->length--;
 	s = realloc(s, sizeof(Stack) + s->length * sizeof(void*));
 	return s;
-}
-
-Stack* Stack_fpop(Stack *s) {
-	free(s->content[s->length - 1]);
-	return Stack_pop(s);
 }
 
 typedef struct String {
@@ -67,6 +63,21 @@ bool String_has_char(String *s, char c) {
 	return false;
 }
 
+bool String_is(String *s, char *c) {
+	size_t i = 0;
+	for (; i < s->length; i++) {
+		if (c[i] == '\0' || c[i] != s->content[i]) {
+			return false;
+		}
+	}
+
+	if (c[i] != '\0') {
+		return false;
+	}
+
+	return true;
+}
+
 typedef struct Number {
 	bool is_double;
 	union {
@@ -83,12 +94,19 @@ Number* Number_new() {
 }
 
 typedef enum {
+	ELEMENT_NOTHING,
 	ELEMENT_NULL,
 	ELEMENT_VARIABLE,
-	ELEMENT_NUMBER,
 	ELEMENT_STRING,
+	ELEMENT_NUMBER,
+	ELEMENT_BRACKET,
+	ELEMENT_TERMINATOR,
+	ELEMENT_BRACE,
+
 	ELEMENT_OPERATION,
 	ELEMENT_SEQUENCE,
+
+	ELEMENT_SCOPE,
 } ElementType;
 
 typedef struct Element {
@@ -152,9 +170,11 @@ void Element_print(Element *e) {
 		case ELEMENT_OPERATION:
 			{
 				Operation *o = e->value;
-				putchar('(');
-				Element_print(o->a);
-				putchar(' ');
+				if (o->a != NULL) {
+					putchar('(');
+					Element_print(o->a);
+					putchar(' ');
+				}
 				switch (o->type) {
 					case OPERATION_APPLICATION:
 						break;
@@ -171,12 +191,14 @@ void Element_print(Element *e) {
 						putchar('-');
 						break;
 					case OPERATION_EQUALITY:
-						putchar('=');
+						fputs("==", stdout);
 						break;
 				}
-				putchar(' ');
-				Element_print(o->b);
-				putchar(')');
+				if (o->b != NULL) {
+					putchar(' ');
+					Element_print(o->b);
+					putchar(')');
+				}
 			};
 			break;
 		case ELEMENT_SEQUENCE:
@@ -218,10 +240,23 @@ void Element_print(Element *e) {
 		case ELEMENT_NULL:
 			putchar('?');
 			break;
+		case ELEMENT_BRACKET:
+			putchar((uintptr_t)(e->value) ? ')' : '(');
+			break;
+		case ELEMENT_BRACE:
+			putchar((uintptr_t)(e->value) ? '}' : '{');
+			break;
+		case ELEMENT_TERMINATOR:
+			putchar(';');
+			break;
 	}
 }
 
 void Element_nuke(Element *e) {
+	if (e == NULL) {
+		return;
+	}
+
 	switch (e->type) {
 		case ELEMENT_VARIABLE:
 		case ELEMENT_NUMBER:
@@ -256,95 +291,6 @@ void Element_nuke(Element *e) {
 	}
 
 	free(e);
-}
-
-typedef enum {
-	TOKEN_NOTHING,
-	TOKEN_NULL,
-	TOKEN_VARIABLE,
-	TOKEN_OPERATOR,
-	TOKEN_STRING,
-	TOKEN_NUMBER,
-	TOKEN_BRACKET,
-	TOKEN_TERMINATOR,
-	TOKEN_BRACE,
-} TokenType;
-
-typedef struct Token {
-	TokenType type;
-	String *value;
-} Token;
-
-Token* Token_new(TokenType type, String *value) {
-	Token *t = malloc(sizeof(Token));
-	t->type = type;
-	t->value = value;
-	return t;
-}
-
-void Token_nuke(Token *t) {
-	free(t->value);
-	free(t);
-}
-
-Element* elementify_token(Token *t) {
-	switch (t->type) {
-		case TOKEN_NULL:
-			return Element_new(ELEMENT_NULL, NULL);
-		case TOKEN_NUMBER:
-			{
-				Number *n = Number_new();
-
-				char number_string[t->value->length + 1];
-				memcpy(number_string, t->value->content, t->value->length);
-				number_string[t->value->length] = '\0';
-
-				if (String_has_char(t->value, '.')) {
-					n->is_double = true;
-					n->value_double = atof(number_string);
-				} else {
-					n->value_long = atoi(number_string);
-				}
-
-				return Element_new(ELEMENT_NUMBER, n);
-			};
-		case TOKEN_OPERATOR:
-			{
-				int value;
-				switch (t->value->content[0]) {
-					case '+':
-						value = OPERATION_ADDITION;
-						break;
-					case '-':
-						value = OPERATION_SUBTRACTION;
-						break;
-					case '*':
-						value = OPERATION_MULTIPLICATION;
-						break;
-					case '/':
-						value = OPERATION_DIVISION;
-						break;
-					case '=':
-						value = OPERATION_EQUALITY;
-						break;
-				}
-				return Element_new(ELEMENT_OPERATION, Operation_new(value, NULL, NULL));
-			};
-		case TOKEN_STRING:
-			{
-				String *s = t->value;
-				String *new_s = String_new(s->length);
-				memcpy(new_s->content, s->content, s->length);
-				return Element_new(ELEMENT_STRING, new_s);
-			};
-		case TOKEN_VARIABLE:
-			{
-				String *s = t->value;
-				String *new_s = String_new(s->length);
-				memcpy(new_s->content, s->content, s->length);
-				return Element_new(ELEMENT_VARIABLE, new_s);
-			};
-	}
 }
 
 Element* operatify(Stack *expression, size_t start, size_t end) {
@@ -399,23 +345,26 @@ Element* elementify_expression(Stack *tokens, size_t *i) {
 	Stack *expression = Stack_new();
 
 	for (; *i < tokens->length; (*i)++) {
-		Token *t = tokens->content[*i];
+		Element *t = tokens->content[*i];
 
-		if (t->type == TOKEN_BRACKET && t->value->content[0] == ')') {
+		if (t->type == ELEMENT_BRACKET && (uintptr_t)(t->value)) {
+			free(t);
 			break;
 		}
 
 		switch (t->type) {
-			case TOKEN_BRACE:
+			case ELEMENT_BRACE:
+				free(t);
 				(*i)++;
 				expression = Stack_push(expression, elementify_sequence(tokens, i));
 				break;
-			case TOKEN_BRACKET:
+			case ELEMENT_BRACKET:
+				free(t);
 				(*i)++;
 				expression = Stack_push(expression, elementify_expression(tokens, i));
 				break;
 			default:
-				expression = Stack_push(expression, elementify_token(t));
+				expression = Stack_push(expression, t);
 				break;
 		}
 	}
@@ -433,22 +382,27 @@ Element* elementify_sequence(Stack *tokens, size_t *i) {
 	Stack *statement = Stack_new();
 
 	for (; *i < tokens->length; (*i)++) {
-		Token *t = tokens->content[*i];
+		Element *t = tokens->content[*i];
 
-		if (t->type == TOKEN_BRACE && t->value->content[0] == '}') {
+		if (t->type == ELEMENT_BRACE && (uintptr_t)(t->value)) {
+			free(t);
 			break;
 		}
 
 		switch (t->type) {
-			case TOKEN_BRACE:
+			case ELEMENT_BRACE:
+				free(t);
 				(*i)++;
 				statement = Stack_push(statement, elementify_sequence(tokens, i));
 				break;
-			case TOKEN_BRACKET:
+			case ELEMENT_BRACKET:
+				free(t);
 				(*i)++;
 				statement = Stack_push(statement, elementify_expression(tokens, i));
 				break;
-			case TOKEN_TERMINATOR:
+			case ELEMENT_TERMINATOR:
+				free(t);
+
 				if (statement->length < 0) {
 					break;
 				}
@@ -458,7 +412,7 @@ Element* elementify_sequence(Stack *tokens, size_t *i) {
 				statement = Stack_new();
 				break;
 			default:
-				statement = Stack_push(statement, elementify_token(tokens->content[*i]));
+				statement = Stack_push(statement, tokens->content[*i]);
 				break;
 		}
 	}
@@ -468,20 +422,10 @@ Element* elementify_sequence(Stack *tokens, size_t *i) {
 	return Element_new(ELEMENT_SEQUENCE, sequence);
 }
 
-void print_tokens(Stack *tokens) {
-	char token_types[] = "Z?VOSNB;M";
-	for (size_t i = 0; i < tokens->length; i++) {
-		Token *token = tokens->content[i];
-		printf("[%c ", token_types[token->type]);
-		String_print(token->value);
-		printf("] ");
-	}
-}
-
 Stack* tokenise(String *script) {
 	Stack *tokens = Stack_new();
 
-	TokenType current_type;
+	ElementType current_type;
 	String *current_value = String_new(0);
 
 	bool escaped = false;
@@ -489,7 +433,7 @@ Stack* tokenise(String *script) {
 	bool in_string = false;
 
 	for (size_t i = 0; i <= script->length; i++) {
-		TokenType new_type;
+		ElementType new_type;
 
 		char c;
 
@@ -514,10 +458,10 @@ Stack* tokenise(String *script) {
 		}
 
 		if (escaped || in_string) {
-			new_type = TOKEN_VARIABLE;
+			new_type = ELEMENT_VARIABLE;
 
 			if (in_string) {
-				new_type = TOKEN_STRING;
+				new_type = ELEMENT_STRING;
 
 				if (escaped) {
 					switch (c) {
@@ -532,7 +476,7 @@ Stack* tokenise(String *script) {
 							break;
 					}
 				} else if (c == '"') {
-					new_type = TOKEN_NOTHING;
+					new_type = ELEMENT_NOTHING;
 				}
 			}
 		} else {
@@ -541,21 +485,21 @@ Stack* tokenise(String *script) {
 				case '\t':
 				case '\n':
 				case '\r':
-					new_type = TOKEN_NOTHING;
+					new_type = ELEMENT_NOTHING;
 					break;
 				case ';':
-					new_type = TOKEN_TERMINATOR;
+					new_type = ELEMENT_TERMINATOR;
 					break;
 				case '(':
 				case ')':
-					new_type = TOKEN_BRACKET;
+					new_type = ELEMENT_BRACKET;
 					break;
 				case '{':
 				case '}':
-					new_type = TOKEN_BRACE;
+					new_type = ELEMENT_BRACE;
 					break;
 				case '"':
-					new_type = TOKEN_STRING;
+					new_type = ELEMENT_STRING;
 					break;
 				case '+':
 				case '-':
@@ -563,11 +507,11 @@ Stack* tokenise(String *script) {
 				case '/':
 				case '%':
 				case '=':
-					new_type = TOKEN_OPERATOR;
+					new_type = ELEMENT_OPERATION;
 					break;
 				case '.':
-					if (current_type != TOKEN_NUMBER) {
-						new_type = TOKEN_OPERATOR;
+					if (current_type != ELEMENT_NUMBER) {
+						new_type = ELEMENT_OPERATION;
 					}
 					break;
 				case '0':
@@ -580,36 +524,102 @@ Stack* tokenise(String *script) {
 				case '7':
 				case '8':
 				case '9':
-					new_type = TOKEN_NUMBER;
+					new_type = ELEMENT_NUMBER;
 					break;
 				case '?':
-					new_type = TOKEN_NULL;
+					new_type = ELEMENT_NULL;
 					break;
 				default:
-					new_type = TOKEN_VARIABLE;
+					new_type = ELEMENT_VARIABLE;
 					break;
 			}
 		}
 
 		if ((current_value->length > 0 || in_string) && (new_type != current_type ||
-					current_type == TOKEN_BRACKET ||
-					current_type == TOKEN_BRACE ||
-					current_type == TOKEN_TERMINATOR
+					current_type == ELEMENT_BRACKET ||
+					current_type == ELEMENT_BRACE ||
+					current_type == ELEMENT_TERMINATOR
 					)) {
 
-			Token *new_token = Token_new(current_type, current_value);
+			Element *new_token = Element_new(current_type, NULL);
+			switch (current_type) {
+				case ELEMENT_NULL:
+				case ELEMENT_TERMINATOR:
+					free(current_value);
+					break;
+				case ELEMENT_VARIABLE:
+				case ELEMENT_STRING:
+					new_token->value = current_value;
+					break;
+				case ELEMENT_BRACKET:
+				case ELEMENT_BRACE:
+					{
+						char bc = current_value->content[0];
+
+						new_token->value = (void*)(uintptr_t)(bc == '}' || bc == ')');
+						
+						free(current_value);
+					};
+					break;
+				case ELEMENT_OPERATION:
+					{
+						Operation *o = Operation_new(OPERATION_APPLICATION, NULL, NULL);
+
+						if (String_is(current_value, "+")) {
+							o->type = OPERATION_ADDITION;
+						}
+						if (String_is(current_value, "-")) {
+							o->type = OPERATION_SUBTRACTION;
+						}
+						if (String_is(current_value, "*")) {
+							o->type = OPERATION_MULTIPLICATION;
+						}
+						if (String_is(current_value, "/")) {
+							o->type = OPERATION_DIVISION;
+						}
+						if (String_is(current_value, "==")) {
+							o->type = OPERATION_EQUALITY;
+						}
+
+						new_token->value = o;
+
+						free(current_value);
+					};
+					break;
+				case ELEMENT_NUMBER:
+					{
+						Number *n = Number_new();
+
+						char number_string[current_value->length + 1];
+						memcpy(number_string, current_value->content, current_value->length);
+						number_string[current_value->length] = '\0';
+
+						if (String_has_char(current_value, '.')) {
+							n->is_double = true;
+							n->value_double = atof(number_string);
+						} else {
+							n->value_long = atoi(number_string);
+						}
+
+						new_token->value = n;
+
+						free(current_value);
+					};
+					break;
+			}
 			tokens = Stack_push(tokens, new_token);
-			current_type = TOKEN_NOTHING;
+
+			current_type = ELEMENT_NOTHING;
 			current_value = String_new(0);
 		}
 
 		current_type = new_type;
 
-		if (current_type != TOKEN_NOTHING && (in_string || current_type != TOKEN_STRING)) {
+		if (current_type != ELEMENT_NOTHING && (in_string || current_type != ELEMENT_STRING)) {
 			current_value = String_append_char(current_value, c);
 		}
 
-		in_string = current_type == TOKEN_STRING;
+		in_string = current_type == ELEMENT_STRING;
 
 		escaped = false;
 	}
@@ -623,7 +633,9 @@ void eval(String *script) {
 	Stack *tokens = tokenise(script);
 
 	putchar('\n');
-	print_tokens(tokens);
+	for (size_t i = 0; i < tokens->length; i++) {
+		Element_print(tokens->content[i]);
+	}
 	putchar('\n');
 	putchar('\n');
 
@@ -633,9 +645,6 @@ void eval(String *script) {
 		root_element = elementify_sequence(tokens, &i);
 	};
 
-	for (size_t i = 0; i < tokens->length; i++) {
-		Token_nuke(tokens->content[i]);
-	}
 	free(tokens);
 
 	Element_print(root_element);
