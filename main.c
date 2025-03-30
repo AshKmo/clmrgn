@@ -29,6 +29,16 @@ Stack* Stack_pop(Stack *s) {
 	return s;
 }
 
+Stack* Stack_delete(Stack *s, size_t i) {
+	for (; i < s->length; i++) {
+		s->content[i - 1] = s->content[i];
+	}
+
+	s->length--;
+	s = realloc(s, sizeof(Stack) * s->length * sizeof(void*));
+	return s;
+}
+
 typedef struct String {
 	size_t length;
 	char content[];
@@ -111,8 +121,17 @@ typedef enum {
 
 typedef struct Element {
 	ElementType type;
+	bool gc_checked;
 	void *value;
 } Element;
+
+Element* Element_new(ElementType type, void *value) {
+	Element *e = malloc(sizeof(Element));
+	e->type = type;
+	e->gc_checked = false;
+	e->value = value;
+	return e;
+}
 
 /*
  * TO ADD NEW OPERATIONS:
@@ -148,11 +167,116 @@ Operation* Operation_new(OperationType type, Element *a, Element *b) {
 	return o;
 }
 
-Element* Element_new(ElementType type, void *value) {
-	Element *e = malloc(sizeof(Element));
-	e->type = type;
-	e->value = value;
-	return e;
+typedef struct Map {
+	Element *key;
+	Element *value;
+} Map;
+
+typedef struct Scope {
+	size_t length;
+	Map maps[];
+} Scope;
+
+Scope* Scope_new() {
+	Scope *s = malloc(sizeof(Scope));
+	s->length = 0;
+	return s;
+}
+
+bool Element_compare(Element *a, Element *b) {
+	if (a->type != b->type) {
+		return false;
+	}
+
+	switch (a->type) {
+		case ELEMENT_NULL:
+			return true;
+		case ELEMENT_STRING:
+			{
+				String *sa = a->value;
+				String *sb = b->value;
+
+				if (sa->length != sb->length) {
+					return false;
+				}
+
+				for (size_t i = 0; i < sa->length; i++) {
+					if (sa->content[i] != sb->content[i]) {
+						return false;
+					}
+				}
+
+				return true;
+			};
+		case ELEMENT_NUMBER:
+			{
+				Number *na = a->value;
+				Number *nb = b->value;
+
+				if (na->is_double) {
+					if (nb->is_double) {
+						return na->value_double == nb->value_double;
+					} else {
+						return na->value_double == nb->value_long;
+					}
+				} else {
+					if (nb->is_double) {
+						return na->value_long == nb->value_double;
+					} else {
+						return na->value_long == nb->value_long;
+					}
+				}
+			};
+	}
+
+	return a == b;
+}
+
+Scope* Scope_set(Scope *s, Element *key, Element *value) {
+	for (size_t i = 0; i < s->length; i++) {
+		if (Element_compare(s->maps[i].key, key)) {
+			s->maps[i].value = value;
+			return s;
+		}
+	}
+
+	s = realloc(s, sizeof(Scope) + (s->length + 1) * sizeof(Map));
+	s->maps[s->length].key = key;
+	s->maps[s->length].value = value;
+	s->length++;
+
+	return s;
+}
+
+Element* Scope_get(Scope *s, Element *key) {
+	for (size_t i = 0; i < s->length; i++) {
+		if (Element_compare(s->maps[i].key, key)) {
+			return s->maps[i].value;
+		}
+	}
+
+	return NULL;
+}
+
+Scope* Scope_delete(Scope *s, Element *key) {
+	bool shift_back = false;
+
+	for (size_t i = 0; i < s->length; i++) {
+		if (shift_back) {
+			s->maps[i - 1].key = s->maps[i].value;
+			s->maps[i - 1].value = s->maps[i].value;
+			continue;
+		}
+
+		if (Element_compare(s->maps[i].key, key)) {
+			shift_back = true;
+		}
+	}
+
+	s->length--;
+	s = realloc(s, sizeof(Scope) + s->length * sizeof(Map));
+
+	return s;
 }
 
 void Element_print(Element *e) {
@@ -253,7 +377,7 @@ void Element_print(Element *e) {
 }
 
 void Element_nuke(Element *e) {
-	if (e == NULL) {
+	if (e == NULL || e->gc_checked) {
 		return;
 	}
 
@@ -261,6 +385,7 @@ void Element_nuke(Element *e) {
 		case ELEMENT_VARIABLE:
 		case ELEMENT_NUMBER:
 		case ELEMENT_STRING:
+		case ELEMENT_SCOPE:
 			free(e->value);
 			break;
 		case ELEMENT_OPERATION:
@@ -291,6 +416,54 @@ void Element_nuke(Element *e) {
 	}
 
 	free(e);
+}
+
+void garbage_check(Element *e, bool gc_check) {
+	if (e == NULL) {
+		return;
+	}
+
+	if (e->gc_checked && gc_check) {
+		return;
+	}
+
+	e->gc_checked = gc_check;
+
+	switch (e->type) {
+		case ELEMENT_SCOPE:
+			{
+				Scope *s = e->value;
+				for (size_t i = 0; i < s->length; i++) {
+					garbage_check(s->maps[i].key, gc_check);
+					garbage_check(s->maps[i].value, gc_check);
+				}
+			};
+			break;
+	}
+}
+
+void garbage_collect(Element *return_value, Stack **scopes, Stack **heap) {
+	garbage_check(return_value, true);
+
+	if (scopes != NULL) {
+		for (size_t i = 0; i < (*scopes)->length; i++) {
+			garbage_check((*scopes)->content[i], true);
+		}
+	}
+
+	for (size_t i = 0; i < (*heap)->length; i++) {
+		Element *e = (*heap)->content[i];
+
+		if (e->gc_checked) {
+			e->gc_checked = false;
+		} else {
+			Element_nuke(e);
+			*heap = Stack_delete(*heap, i);
+		}
+	}
+}
+
+Element* Element_evaluate(Element *e, Stack **scopes, Stack **heap) {
 }
 
 Element* operatify(Stack *expression, size_t start, size_t end) {
@@ -629,7 +802,7 @@ Stack* tokenise(String *script) {
 	return tokens;
 }
 
-void eval(String *script) {
+Element* eval(String *script) {
 	Stack *tokens = tokenise(script);
 
 	putchar('\n');
@@ -651,7 +824,24 @@ void eval(String *script) {
 	putchar('\n');
 	putchar('\n');
 
+	Element *result;
+	{
+		Stack *scopes = Stack_new();
+		Stack *heap = Stack_new();
+
+		result = Element_evaluate(root_element, &scopes, &heap);
+
+		free(scopes);
+
+		garbage_check(root_element, false);
+		garbage_collect(result, NULL, &heap);
+
+		free(heap);
+	};
+
 	Element_nuke(root_element);
+
+	return result;
 }
 
 int main(int argc, char *argv[]) {
