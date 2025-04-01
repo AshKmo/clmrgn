@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
+#include <math.h>
+#include <ctype.h>
 
 typedef struct Stack {
 	size_t length;
@@ -30,12 +32,13 @@ Stack* Stack_pop(Stack *s) {
 }
 
 Stack* Stack_delete(Stack *s, size_t i) {
+	i++;
 	for (; i < s->length; i++) {
 		s->content[i - 1] = s->content[i];
 	}
 
 	s->length--;
-	s = realloc(s, sizeof(Stack) * s->length * sizeof(void*));
+	s = realloc(s, sizeof(Stack) + s->length * sizeof(void*));
 	return s;
 }
 
@@ -103,6 +106,7 @@ Number* Number_new() {
 	return n;
 }
 
+// TODO: add functions
 typedef enum {
 	ELEMENT_NOTHING,
 	ELEMENT_NULL,
@@ -117,11 +121,13 @@ typedef enum {
 	ELEMENT_SEQUENCE,
 
 	ELEMENT_SCOPE,
+	ELEMENT_FUNCTION,
 } ElementType;
 
 typedef struct Element {
 	ElementType type;
 	bool gc_checked;
+	bool heaper_checked;
 	void *value;
 } Element;
 
@@ -129,6 +135,7 @@ Element* Element_new(ElementType type, void *value) {
 	Element *e = malloc(sizeof(Element));
 	e->type = type;
 	e->gc_checked = false;
+	e->heaper_checked = false;
 	e->value = value;
 	return e;
 }
@@ -138,20 +145,24 @@ Element* Element_new(ElementType type, void *value) {
  * - add a new OperationType value
  * - set its precedence in OPERATION_PRECEDENCE
  * - add a case in Element_print
- * - add a case in elementify_token
- * - add a case in tokenise
+ * - add cases in tokenise:
+ *   - any unhandled characters in the operator must be treated as operator characters
+ *   - the operator must be identified after the token is complete
+ * - add its behaviour in Element_evaluate
  */
 
+// TODO: add more operators
 typedef enum {
 	OPERATION_APPLICATION,
 	OPERATION_MULTIPLICATION,
 	OPERATION_DIVISION,
 	OPERATION_ADDITION,
 	OPERATION_SUBTRACTION,
+	OPERATION_CONCATENATION,
 	OPERATION_EQUALITY,
 } OperationType;
 
-const int OPERATION_PRECEDENCE[] = {0, 1, 1, 2, 2, 3};
+const int OPERATION_PRECEDENCE[] = {0, 1, 1, 2, 2, 3, 4};
 
 typedef struct Operation {
 	OperationType type;
@@ -183,6 +194,20 @@ Scope* Scope_new() {
 	return s;
 }
 
+typedef struct Function {
+	Stack *internal_scopes;
+	Element *variable;
+	Element *expression;
+} Function;
+
+Function* Function_new(Stack *internal_scopes, Element *variable, Element *expression) {
+	Function *f = malloc(sizeof(Function));
+	f->internal_scopes = internal_scopes;
+	f->variable = variable;
+	f->expression = expression;
+	return f;
+}
+
 bool Element_compare(Element *a, Element *b) {
 	if (a->type != b->type) {
 		return false;
@@ -191,6 +216,7 @@ bool Element_compare(Element *a, Element *b) {
 	switch (a->type) {
 		case ELEMENT_NULL:
 			return true;
+		case ELEMENT_VARIABLE:
 		case ELEMENT_STRING:
 			{
 				String *sa = a->value;
@@ -232,6 +258,24 @@ bool Element_compare(Element *a, Element *b) {
 	return a == b;
 }
 
+bool Element_is_truthy(Element *e) {
+	if (e->type == ELEMENT_NULL) {
+		return false;
+	}
+
+	if (e->type == ELEMENT_NUMBER) {
+		Number *n = e->value;
+
+		if (n->is_double) {
+			return n->value_double != 0 && n->value_double != NAN;
+		} else {
+			return n->value_long != 0;
+		}
+	}
+	
+	return true;
+}
+
 Scope* Scope_set(Scope *s, Element *key, Element *value) {
 	for (size_t i = 0; i < s->length; i++) {
 		if (Element_compare(s->maps[i].key, key)) {
@@ -256,6 +300,16 @@ Element* Scope_get(Scope *s, Element *key) {
 	}
 
 	return NULL;
+}
+
+bool Scope_has(Scope *s, Element *key) {
+	for (size_t i = 0; i < s->length; i++) {
+		if (Element_compare(s->maps[i].key, key)) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 Scope* Scope_delete(Scope *s, Element *key) {
@@ -313,6 +367,9 @@ void Element_print(Element *e) {
 						break;
 					case OPERATION_SUBTRACTION:
 						putchar('-');
+						break;
+					case OPERATION_CONCATENATION:
+						fputs("..", stdout);
 						break;
 					case OPERATION_EQUALITY:
 						fputs("==", stdout);
@@ -373,6 +430,12 @@ void Element_print(Element *e) {
 		case ELEMENT_TERMINATOR:
 			putchar(';');
 			break;
+		case ELEMENT_SCOPE:
+			puts("{...}");
+			break;
+		case ELEMENT_FUNCTION:
+			puts("[FUNCTION]");
+			break;
 	}
 }
 
@@ -387,6 +450,13 @@ void Element_nuke(Element *e) {
 		case ELEMENT_STRING:
 		case ELEMENT_SCOPE:
 			free(e->value);
+			break;
+		case ELEMENT_FUNCTION:
+			{
+				Function *f = e->value;
+				free(f->internal_scopes);
+				free(f);
+			};
 			break;
 		case ELEMENT_OPERATION:
 			{
@@ -430,12 +500,43 @@ void garbage_check(Element *e, bool gc_check) {
 	e->gc_checked = gc_check;
 
 	switch (e->type) {
+		case ELEMENT_FUNCTION:
+			{
+				Function *f = e->value;
+
+				for (size_t i = 0; i < f->internal_scopes->length; i++) {
+					garbage_check(f->internal_scopes->content[i], gc_check);
+				}
+
+				garbage_check(f->variable, gc_check);
+				garbage_check(f->expression, gc_check);
+			};
+			break;
 		case ELEMENT_SCOPE:
 			{
 				Scope *s = e->value;
 				for (size_t i = 0; i < s->length; i++) {
 					garbage_check(s->maps[i].key, gc_check);
 					garbage_check(s->maps[i].value, gc_check);
+				}
+			};
+			break;
+		case ELEMENT_OPERATION:
+			{
+				Operation *o = e->value;
+				garbage_check(o->a, gc_check);
+				garbage_check(o->b, gc_check);
+			};
+			break;
+		case ELEMENT_SEQUENCE:
+			{
+				Stack *sequence = e->value;
+				for (size_t y = 0; y < sequence->length; y++) {
+					Stack *statement = sequence->content[y];
+
+					for (size_t x = 0; x < statement->length; x++) {
+						garbage_check(statement->content[x], gc_check);
+					}
 				}
 			};
 			break;
@@ -463,7 +564,510 @@ void garbage_collect(Element *return_value, Stack **scopes, Stack **heap) {
 	}
 }
 
+Element* heap_it(Element *e, Stack **heap) {
+	*heap = Stack_push(*heap, e);
+	return e;
+}
+
+Element* heaper(Element *e, Stack **heap) {
+	if (e == NULL || e->heaper_checked) {
+		return NULL;
+	}
+
+	if (heap != NULL) {
+		for (size_t i = 0; i < (*heap)->length; i++) {
+			if ((*heap)->content[i] == e) {
+				return NULL;
+			}
+		}
+
+		heap_it(e, heap);
+	}
+
+	e->heaper_checked = true;
+	e->gc_checked = false;
+
+	switch (e->type) {
+		case ELEMENT_SCOPE:
+			{
+				Scope *s = e->value;
+
+				for (size_t i = 0; i < s->length; i++) {
+					heaper(s->maps[i].key, heap);
+					heaper(s->maps[i].value, heap);
+				}
+			};
+			break;
+		case ELEMENT_FUNCTION:
+			{
+				Function *f = e->value;
+
+				for (size_t i = 0; i < f->internal_scopes->length; i++) {
+					heaper(f->internal_scopes->content[i], heap);
+				}
+
+				heaper(f->variable, heap);
+				heaper(f->expression, heap);
+			};
+			break;
+	}
+
+	e->heaper_checked = false;
+
+	return e;
+}
+
+void Element_discard(Element *e) {
+	Stack *to_be_discarded = Stack_new();
+
+	heaper(e, &to_be_discarded);
+
+	for (size_t i = 0; i < to_be_discarded->length; i++) {
+		Element *e = to_be_discarded->content[i];
+		Element_nuke(e);
+	}
+
+	free(to_be_discarded);
+}
+
+Element* make(Stack **heap, ElementType type, void *value) {
+	return heap_it(Element_new(type, value), heap);
+}
+
+void bruh(char *e) {
+	fputs("ERROR: ", stderr);
+	fputs(e, stderr);
+	fputc('\n', stderr);
+	exit(1);
+}
+
+Element* fetch(Stack **scopes, Element *key) {
+	for (size_t i = 0; i < (*scopes)->length; i++) {
+		Element *scope_element = (*scopes)->content[(*scopes)->length - 1 - i];
+
+		Element *result = Scope_get(scope_element->value, key);
+
+		if (result != NULL) {
+			return result;
+		}
+	}
+
+	return NULL;
+}
+
+void mutate(Stack **scopes, Element *key, Element *value, bool local_only) {
+	Element *scope_element;
+
+	size_t i = 0;
+	if (!local_only) {
+		for (; i < (*scopes)->length; i++) {
+			scope_element = (*scopes)->content[(*scopes)->length - 1 - i];
+
+			if (Scope_has(scope_element->value, key)) {
+				break;
+			}
+		}
+	}
+
+	if (local_only || i == (*scopes)->length) {
+		scope_element = (*scopes)->content[(*scopes)->length - 1];
+	}
+
+	scope_element->value = Scope_set(scope_element->value, key, value);
+}
+
+Number* Number_operate(OperationType ot, Number *na, Number *nb) {
+	Number *result = Number_new();
+	result->is_double = na->is_double || nb->is_double;
+
+	switch (ot) {
+		case OPERATION_ADDITION:
+			if (result->is_double) {
+				result->value_double =
+					(na->is_double ? na->value_double : na->value_long) +
+					(nb->is_double ? nb->value_double : nb->value_long);
+			} else {
+				result->value_long = na->value_long + nb->value_long;
+			}
+			break;
+		case OPERATION_SUBTRACTION:
+			if (result->is_double) {
+				result->value_double =
+					(na->is_double ? na->value_double : na->value_long) -
+					(nb->is_double ? nb->value_double : nb->value_long);
+			} else {
+				result->value_long = na->value_long - nb->value_long;
+			}
+			break;
+		case OPERATION_MULTIPLICATION:
+			if (result->is_double) {
+				result->value_double =
+					(na->is_double ? na->value_double : na->value_long) *
+					(nb->is_double ? nb->value_double : nb->value_long);
+			} else {
+				result->value_long = na->value_long * nb->value_long;
+			}
+			break;
+		case OPERATION_DIVISION:
+			if (!result->is_double && (
+						nb->value_long == 0 ||
+						na->value_long % nb->value_long != 0
+						)) {
+				result->is_double = true;
+			}
+
+			if (result->is_double) {
+				double da = na->is_double ? na->value_double : na->value_long;
+				double db = nb->is_double ? nb->value_double : nb->value_long;
+
+				result->value_double = db == 0 ?
+					(da == 0 ? NAN : da > 0 ? INFINITY : -INFINITY) :
+					da / db;
+			} else {
+				result->value_long = na->value_long / nb->value_long;
+			}
+			break;
+	}
+
+	return result;
+}
+
+Element* eval(String *script);
+
 Element* Element_evaluate(Element *e, Stack **scopes, Stack **heap) {
+	switch (e->type) {
+		case ELEMENT_SEQUENCE:
+			{
+				*scopes = Stack_push(*scopes, make(heap, ELEMENT_SCOPE, Scope_new()));
+
+				Stack *sequence = e->value;
+
+				for (size_t i = 0; i < sequence->length; i++) {
+					Stack *statement = sequence->content[i];
+
+					String *command;
+					{
+						Element *first = statement->content[0];
+						if (first->type != ELEMENT_VARIABLE) {
+							bruh("command names are not dynamic");
+						}
+						command = first->value;
+					};
+
+					if (String_is(command, "return")) {
+						if (statement->length != 2) {
+							bruh("'return' command accepts 1 argument");
+						}
+
+						Element *result = Element_evaluate(statement->content[1], scopes, heap);
+
+						*scopes = Stack_pop(*scopes);
+
+						garbage_collect(result, scopes, heap);
+
+						return result;
+					}
+
+					if (String_is(command, "read")) {
+						if (statement->length != 1) {
+							bruh("'read' command does not accept arguments");
+						}
+
+						Element *result;
+						{
+							char *input = NULL;
+							size_t allocated_length = 0;
+
+							size_t length = getline(&input, &allocated_length, stdin) - 1;
+
+							String *s = String_new(length);
+							memcpy(&(s->content), input, length);
+
+							free(input);
+
+							result = make(heap, ELEMENT_STRING, s);
+						}
+
+						*scopes = Stack_pop(*scopes);
+
+						garbage_collect(result, scopes, heap);
+
+						return result;
+					}
+
+					if (String_is(command, "eval")) {
+						if (statement->length != 2) {
+							bruh("'eval' command accepts 1 argument");
+						}
+
+						Element *expression = Element_evaluate(statement->content[1], scopes, heap);
+
+						Element *result = heaper(eval(expression->value), heap);
+
+						*scopes = Stack_pop(*scopes);
+
+						garbage_collect(result, scopes, heap);
+
+						return result;
+					}
+
+					if (String_is(command, "do")) {
+						for (size_t i = 1; i < statement->length; i++) {
+							Element_evaluate(statement->content[i], scopes, heap);
+						}
+					}
+
+					if (String_is(command, "show")) {
+						for (size_t i = 1; i < statement->length; i++) {
+							Element_print(Element_evaluate(statement->content[i], scopes, heap));
+
+							if (i < statement->length - 1) {
+								putchar(' ');
+							}
+						}
+						putchar('\n');
+					}
+
+					if (String_is(command, "print") || String_is(command, "write")) {
+						for (size_t i = 1; i < statement->length; i++) {
+							Element *to_print = Element_evaluate(statement->content[i], scopes, heap);
+							
+							if (to_print->type == ELEMENT_STRING) {
+								String_print(to_print->value);
+							} else {
+								Element_print(to_print);
+							}
+
+							if (i < statement->length - 1) {
+								putchar(' ');
+							}
+						}
+
+						if (String_is(command, "print")) {
+							putchar('\n');
+						}
+					}
+
+					if (String_is(command, "let")) {
+						if (statement->length != 3) {
+							bruh("'let' command accepts 2 arguments");
+						}
+
+						Element *variable = statement->content[1];
+
+						if (variable->type != ELEMENT_VARIABLE) {
+							variable = Element_evaluate(variable, scopes, heap);
+
+							if (variable->type != ELEMENT_STRING && variable->type != ELEMENT_NUMBER) {
+								bruh("argument 1 of 'let' command must be a variable name, a string or a number");
+							}
+						}
+
+						Element *value = Element_evaluate(statement->content[2], scopes, heap);
+
+						mutate(scopes, variable, value, true);
+					}
+
+					if (String_is(command, "set")) {
+						if (statement->length != 3) {
+							bruh("'set' command accepts 2 arguments");
+						}
+
+						Element *variable = statement->content[1];
+
+						if (variable->type != ELEMENT_VARIABLE) {
+							variable = Element_evaluate(variable, scopes, heap);
+
+							if (variable->type != ELEMENT_STRING && variable->type != ELEMENT_NUMBER) {
+								bruh("argument 1 of 'set' command must be a variable name, a string or a number");
+							}
+						}
+
+						Element *value = Element_evaluate(statement->content[2], scopes, heap);
+
+						mutate(scopes, variable, value, false);
+					}
+
+					if (String_is(command, "mut")) {
+						if (statement->length != 4) {
+							bruh("'mut' command accepts 3 arguments");
+						}
+
+						Element *subject = Element_evaluate(statement->content[1], scopes, heap);
+
+						Element *key = Element_evaluate(statement->content[2], scopes, heap);
+
+						Element *value = Element_evaluate(statement->content[3], scopes, heap);
+
+						subject->value = Scope_set(subject->value, key, value);
+					}
+
+					if (String_is(command, "function")) {
+						if (statement->length < 4) {
+							bruh("'function' command accepts at least 3 arguments");
+						}
+
+						Element *f = statement->content[statement->length - 1];
+
+						for (size_t i = 2; i < statement->length - 1; i++) {
+							Stack *internal_scopes = Stack_new();
+
+							for (size_t i = 0; i < (*scopes)->length; i++) {
+								internal_scopes = Stack_push(internal_scopes, (*scopes)->content[i]);
+							}
+
+							Element *variable = statement->content[i];
+
+							if (variable->type != ELEMENT_VARIABLE) {
+								bruh("function variables must be specified using variable names");
+							}
+
+							f = make(heap, ELEMENT_FUNCTION, Function_new(
+										internal_scopes,
+										variable,
+										f
+										));
+						}
+
+						mutate(scopes, statement->content[1], f, true);
+					}
+
+					if (String_is(command, "while")) {
+						if (statement->length != 3) {
+							bruh("'while' command accepts 2 arguments");
+						}
+
+						while (Element_is_truthy(Element_evaluate(statement->content[1], scopes, heap))) {
+							Element_evaluate(statement->content[2], scopes, heap);
+						}
+					}
+
+					if (String_is(command, "if")) {
+						if (statement->length != 3 && statement->length != 4) {
+							bruh("'if' command accepts either 2 or 3 arguments");
+						}
+
+						if (Element_is_truthy(Element_evaluate(statement->content[1], scopes, heap))) {
+							Element_evaluate(statement->content[2], scopes, heap);
+						} else if (statement->length == 4) {
+							Element_evaluate(statement->content[3], scopes, heap);
+						}
+					}
+
+					garbage_collect(NULL, scopes, heap);
+				}
+
+				Element *result = (*scopes)->content[(*scopes)->length - 1];
+
+				*scopes = Stack_pop(*scopes);
+
+				garbage_collect(result, scopes, heap);
+
+				return result;
+			};
+			break;
+		case ELEMENT_OPERATION:
+			{
+				Operation *o = e->value;
+
+				Element *a = Element_evaluate(o->a, scopes, heap);
+				Element *b = Element_evaluate(o->b, scopes, heap);
+
+				switch (o->type) {
+					case OPERATION_APPLICATION:
+						switch (a->type) {
+							case ELEMENT_NUMBER:
+								{
+									if (b->type != ELEMENT_NUMBER) {
+										bruh("cannot implicitly multiply this type");
+									}
+									return make(heap, ELEMENT_NUMBER,
+											Number_operate(OPERATION_MULTIPLICATION, a->value, b->value)
+											);
+								};
+							case ELEMENT_SCOPE:
+								{
+									Element *result = Scope_get(a->value, b);
+
+									if (result == NULL) {
+										bruh("key does not exist in this Scope object");
+									}
+
+									return result;
+								};
+							case ELEMENT_FUNCTION:
+								{
+									Function *f = e->value;
+
+									*scopes = Stack_push(*scopes, make(heap, ELEMENT_SCOPE, Scope_new()));
+
+									mutate(scopes, f->variable, b, true);
+
+									Element *result = Element_evaluate(f->expression, scopes, heap);
+
+									*scopes = Stack_pop(*scopes);
+
+									garbage_collect(result, scopes, heap);
+
+									return result;
+								};
+							default:
+								bruh("application cannot be applied to this type");
+						}
+						break;
+					case OPERATION_CONCATENATION:
+						{
+							if (a->type != ELEMENT_STRING || b->type != ELEMENT_STRING) {
+								bruh("string concatenation can only be applied to strings");
+							}
+
+							String *sa = a->value;
+							String *sb = b->value;
+
+							String *result = String_new(sa->length + sb->length);
+
+							for (size_t i = 0; i < sa->length + sb->length; i++) {
+								result->content[i] = i >= sa->length ?
+									sb->content[i - sa->length] :
+									sa->content[i];
+							}
+
+							return make(heap, ELEMENT_STRING, result);
+						};
+						break;
+					case OPERATION_ADDITION:
+					case OPERATION_SUBTRACTION:
+					case OPERATION_MULTIPLICATION:
+					case OPERATION_DIVISION:
+						if (a->type != ELEMENT_NUMBER || b->type != ELEMENT_NUMBER) {
+							bruh("numeric operations cannot be applied to this type");
+						}
+						return make(heap, ELEMENT_NUMBER, Number_operate(o->type, a->value, b->value));
+					case OPERATION_EQUALITY:
+						{
+							Number *n = Number_new();
+							n->is_double = false;
+							n->value_long = Element_compare(a, b) ? 1 : 0;
+							return make(heap, ELEMENT_NUMBER, n);
+						};
+						break;
+				}
+			};
+			break;
+		case ELEMENT_VARIABLE:
+			{
+				Element *value = fetch(scopes, e);
+
+				if (value != NULL) {
+					return value;
+				}
+
+				bruh("no such variable");
+			};
+			break;
+	}
+
+	return e;
 }
 
 Element* operatify(Stack *expression, size_t start, size_t end) {
@@ -501,8 +1105,8 @@ Element* operatify(Stack *expression, size_t start, size_t end) {
 	if (final_operation == NULL) {
 		return Element_new(ELEMENT_OPERATION, Operation_new(
 				OPERATION_APPLICATION,
-				expression->content[start],
-				operatify(expression, start + 1, end)
+				operatify(expression, start, end - 1),
+				expression->content[end - 1]
 				));
 	}
 
@@ -595,6 +1199,18 @@ Element* elementify_sequence(Stack *tokens, size_t *i) {
 	return Element_new(ELEMENT_SEQUENCE, sequence);
 }
 
+char hex_char(char c) {
+	if (c >= 97) {
+		return c - 87;
+	}
+
+	if (c >= 65) {
+		return c - 55;
+	}
+
+	return c - 48;
+}
+
 Stack* tokenise(String *script) {
 	Stack *tokens = Stack_new();
 
@@ -647,6 +1263,10 @@ Stack* tokenise(String *script) {
 						case 't':
 							c = '\t';
 							break;
+						case 'x':
+							c = 16 * hex_char(script->content[i + 1]) + hex_char(script->content[i + 2]);
+							i += 2;
+							break;
 					}
 				} else if (c == '"') {
 					new_type = ELEMENT_NOTHING;
@@ -675,7 +1295,6 @@ Stack* tokenise(String *script) {
 					new_type = ELEMENT_STRING;
 					break;
 				case '+':
-				case '-':
 				case '*':
 				case '/':
 				case '%':
@@ -684,6 +1303,13 @@ Stack* tokenise(String *script) {
 					break;
 				case '.':
 					if (current_type != ELEMENT_NUMBER) {
+						new_type = ELEMENT_OPERATION;
+					}
+					break;
+				case '-':
+					if (i < script->length - 1 && isdigit(script->content[i + 1])) {
+						new_type = ELEMENT_NUMBER;
+					} else {
 						new_type = ELEMENT_OPERATION;
 					}
 					break;
@@ -697,7 +1323,9 @@ Stack* tokenise(String *script) {
 				case '7':
 				case '8':
 				case '9':
-					new_type = ELEMENT_NUMBER;
+					if (current_type != ELEMENT_VARIABLE) {
+						new_type = ELEMENT_NUMBER;
+					}
 					break;
 				case '?':
 					new_type = ELEMENT_NULL;
@@ -715,6 +1343,7 @@ Stack* tokenise(String *script) {
 					)) {
 
 			Element *new_token = Element_new(current_type, NULL);
+
 			switch (current_type) {
 				case ELEMENT_NULL:
 				case ELEMENT_TERMINATOR:
@@ -752,6 +1381,9 @@ Stack* tokenise(String *script) {
 						}
 						if (String_is(current_value, "==")) {
 							o->type = OPERATION_EQUALITY;
+						}
+						if (String_is(current_value, "..")) {
+							o->type = OPERATION_CONCATENATION;
 						}
 
 						new_token->value = o;
@@ -805,12 +1437,14 @@ Stack* tokenise(String *script) {
 Element* eval(String *script) {
 	Stack *tokens = tokenise(script);
 
+	/*
 	putchar('\n');
 	for (size_t i = 0; i < tokens->length; i++) {
 		Element_print(tokens->content[i]);
 	}
 	putchar('\n');
 	putchar('\n');
+	*/
 
 	Element *root_element;
 	{
@@ -820,9 +1454,11 @@ Element* eval(String *script) {
 
 	free(tokens);
 
+	/*
 	Element_print(root_element);
 	putchar('\n');
 	putchar('\n');
+	*/
 
 	Element *result;
 	{
@@ -834,12 +1470,14 @@ Element* eval(String *script) {
 		free(scopes);
 
 		garbage_check(root_element, false);
+		garbage_check(result, true);
+		Element_nuke(root_element);
 		garbage_collect(result, NULL, &heap);
+
+		heaper(result, NULL);
 
 		free(heap);
 	};
-
-	Element_nuke(root_element);
 
 	return result;
 }
@@ -864,7 +1502,7 @@ int main(int argc, char *argv[]) {
 
 	fclose(fptr);
 
-	eval(script);
+	Element_discard(eval(script));
 
 	free(script);
 

@@ -1,4 +1,6 @@
-return {
-	let bruh (3 + 2);
-	show bruh;
+function f x {
+	print "function executed";
+	show (6 * x);
 };
+
+do (f 3);
