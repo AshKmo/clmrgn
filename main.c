@@ -434,7 +434,13 @@ void Element_print(Element *e) {
 			puts("{...}");
 			break;
 		case ELEMENT_FUNCTION:
-			puts("[FUNCTION]");
+			{
+				Function *f = e->value;
+				fputs("[FUNCTION ", stdout);
+				Element_print(f->variable);
+				Element_print(f->expression);
+				putchar(']');
+			};
 			break;
 	}
 }
@@ -588,6 +594,26 @@ Element* heaper(Element *e, Stack **heap) {
 	e->gc_checked = false;
 
 	switch (e->type) {
+		case ELEMENT_OPERATION:
+			{
+				Operation *o = e->value;
+				heaper(o->a, heap);
+				heaper(o->b, heap);
+			};
+			break;
+		case ELEMENT_SEQUENCE:
+			{
+				Stack *sequence = e->value;
+
+				for (size_t y = 0; y < sequence->length; y++) {
+					Stack *statement = sequence->content[y];
+
+					for (size_t x = 0; x < statement->length; x++) {
+						heaper(statement->content[x], heap);
+					}
+				}
+			};
+			break;
 		case ELEMENT_SCOPE:
 			{
 				Scope *s = e->value;
@@ -909,13 +935,14 @@ Element* Element_evaluate(Element *e, Stack **scopes, Stack **heap) {
 
 						Element *f = statement->content[statement->length - 1];
 
-						for (size_t i = 2; i < statement->length - 1; i++) {
-							Stack *internal_scopes = Stack_new();
+						Stack *internal_scopes = Stack_new();
 
-							for (size_t i = 0; i < (*scopes)->length; i++) {
-								internal_scopes = Stack_push(internal_scopes, (*scopes)->content[i]);
-							}
+						for (size_t x = 0; x < (*scopes)->length; x++) {
+							internal_scopes = Stack_push(internal_scopes, (*scopes)->content[x]);
+						}
 
+						for (size_t i = statement->length - 2; i > 1; i--) {
+							
 							Element *variable = statement->content[i];
 
 							if (variable->type != ELEMENT_VARIABLE) {
@@ -997,17 +1024,25 @@ Element* Element_evaluate(Element *e, Stack **scopes, Stack **heap) {
 								};
 							case ELEMENT_FUNCTION:
 								{
-									Function *f = e->value;
+									Function *f = a->value;
 
-									*scopes = Stack_push(*scopes, make(heap, ELEMENT_SCOPE, Scope_new()));
+									Stack *new_heap = Stack_new();
 
-									mutate(scopes, f->variable, b, true);
+									f->internal_scopes = Stack_push(f->internal_scopes, make(&new_heap, ELEMENT_SCOPE, Scope_new()));
 
-									Element *result = Element_evaluate(f->expression, scopes, heap);
+									mutate(&(f->internal_scopes), f->variable, b, true);
 
-									*scopes = Stack_pop(*scopes);
+									Element *result = Element_evaluate(f->expression, &(f->internal_scopes), &new_heap);
 
-									garbage_collect(result, scopes, heap);
+									f->internal_scopes = Stack_pop(f->internal_scopes);
+
+									garbage_collect(result, &(f->internal_scopes), &new_heap);
+
+									for (size_t i = 0; i < new_heap->length; i++) {
+										*heap = Stack_push(*heap, new_heap->content[i]);
+									}
+
+									free(new_heap);
 
 									return result;
 								};
@@ -1063,6 +1098,15 @@ Element* Element_evaluate(Element *e, Stack **scopes, Stack **heap) {
 				}
 
 				bruh("no such variable");
+			};
+			break;
+		case ELEMENT_FUNCTION:
+			{
+				Function *f = e->value;
+				f->internal_scopes = Stack_new();
+				for (size_t i = 0; i < (*scopes)->length; i++) {
+					f->internal_scopes = Stack_push(f->internal_scopes, (*scopes)->content[i]);
+				}
 			};
 			break;
 	}

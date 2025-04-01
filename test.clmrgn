@@ -1,6 +1,5 @@
-function f x {
-	print "function executed";
-	show (6 * x);
+function f x y {
+	do "asdfa";
 };
 
-do (f 3);
+show (f 3 2);
