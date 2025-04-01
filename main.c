@@ -455,6 +455,7 @@ void Element_nuke(Element *e) {
 		case ELEMENT_NUMBER:
 		case ELEMENT_STRING:
 		case ELEMENT_SCOPE:
+		case ELEMENT_OPERATION:
 			free(e->value);
 			break;
 		case ELEMENT_FUNCTION:
@@ -464,24 +465,12 @@ void Element_nuke(Element *e) {
 				free(f);
 			};
 			break;
-		case ELEMENT_OPERATION:
-			{
-				Operation *o = e->value;
-				Element_nuke(o->a);
-				Element_nuke(o->b);
-				free(o);
-			};
-			break;
 		case ELEMENT_SEQUENCE:
 			{
 				Stack *sequence = e->value;
 
 				for (size_t y = 0; y < sequence->length; y++) {
 					Stack *statement = sequence->content[y];
-
-					for (size_t x = 0; x < statement->length; x++) {
-						Element_nuke(statement->content[x]);
-					}
 
 					free(statement);
 				}
@@ -1513,12 +1502,8 @@ Element* eval(String *script) {
 
 		free(scopes);
 
-		garbage_check(root_element, false);
-		garbage_check(result, true);
-		Element_nuke(root_element);
+		heaper(root_element, &heap);
 		garbage_collect(result, NULL, &heap);
-
-		heaper(result, NULL);
 
 		free(heap);
 	};
