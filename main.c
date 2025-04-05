@@ -121,6 +121,7 @@ typedef enum {
 	ELEMENT_SEQUENCE,
 
 	ELEMENT_SCOPE,
+	ELEMENT_SCOPE_COLLECTION,
 } ElementType;
 
 typedef struct Element {
@@ -455,6 +456,7 @@ void Element_nuke(Element *e) {
 		case ELEMENT_STRING:
 		case ELEMENT_SCOPE:
 		case ELEMENT_OPERATION:
+		case ELEMENT_SCOPE_COLLECTION:
 			free(e->value);
 			break;
 		case ELEMENT_SEQUENCE:
@@ -958,6 +960,15 @@ Element* heaper(Element *e, bool gc_checked, Stack **heap) {
 				}
 			};
 			break;
+		case ELEMENT_SCOPE_COLLECTION:
+			{
+				Stack *scopes = e->value;
+
+				for (size_t i = 0; i < scopes->length; i++) {
+					heaper(scopes->content[i], gc_checked, heap);
+				}
+			};
+			break;
 	}
 
 	e->heaper_checked = false;
@@ -975,12 +986,8 @@ void garbage_collect(Element *result, Element *ast_root, Stack **scopes_stack, S
 	}
 
 	if (scopes_stack != NULL) {
-		for (size_t y = 0; y < (*scopes_stack)->length; y++) {
-			Stack *scopes = (*scopes_stack)->content[y];
-
-			for (size_t x = 0; x < scopes->length; x++) {
-				heaper(scopes->content[x], true, NULL);
-			}
+		for (size_t i = 0; i < (*scopes_stack)->length; i++) {
+			heaper((*scopes_stack)->content[i], true, NULL);
 		}
 	}
 
@@ -1009,14 +1016,14 @@ void Element_discard(Element *e) {
 }
 
 Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack, Stack **heap) {
-	Stack **scopes = (Stack**) &((*scopes_stack)->content[(*scopes_stack)->length - 1]);
+	Element *scopes = (*scopes_stack)->content[(*scopes_stack)->length - 1];
 
 	switch (e->type) {
 		case ELEMENT_SEQUENCE:
 			{
 				Element *scope = make(ELEMENT_SCOPE, Scope_new(), heap);
 
-				*scopes = Stack_push(*scopes, scope);
+				scopes->value = Stack_push(scopes->value, scope);
 
 				Stack *sequence = e->value;
 
@@ -1081,7 +1088,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 
 						Element *result = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
 
-						*scopes = Stack_pop(*scopes);
+						scopes->value = Stack_pop(scopes->value);
 
 						return result;
 					}
@@ -1089,7 +1096,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					garbage_collect(NULL, ast_root, scopes_stack, heap);
 				}
 
-				*scopes = Stack_pop(*scopes);
+				scopes->value = Stack_pop(scopes->value);
 
 				return scope;
 			};
@@ -1158,8 +1165,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 			break;
 		case ELEMENT_VARIABLE:
 			{
-				for (size_t i = 0; i < (*scopes)->length; i++) {
-					Element *scope_element = (*scopes)->content[i];
+				Stack *scope_list = scopes->value;
+				for (size_t i = 0; i < scope_list->length; i++) {
+					Element *scope_element = scope_list->content[i];
 					Element *result = Scope_get(scope_element->value, e);
 					if (result != NULL) {
 						return result;
@@ -1173,7 +1181,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 	}
 }
 
-Element* eval(String *script, Stack *scopes) {
+Element* eval(String *script, Element *scopes) {
 	Stack *heap = Stack_new();
 
 	Stack *tokens = tokenise(script, &heap);
@@ -1206,16 +1214,12 @@ Element* eval(String *script, Stack *scopes) {
 		Stack *scopes_stack = Stack_new();
 
 		if (scopes == NULL) {
-			scopes_stack = Stack_push(scopes_stack, Stack_new());
+			scopes_stack = Stack_push(scopes_stack, make(ELEMENT_SCOPE_COLLECTION, Stack_new(), &heap));
 		} else {
 			scopes_stack = Stack_push(scopes_stack, scopes);
 		}
 
 		result = evaluate_expression(ast_root, ast_root, &scopes_stack, &heap);
-
-		if (scopes == NULL) {
-			free(scopes_stack->content[0]);
-		}
 
 		free(scopes_stack);
 	};
