@@ -189,9 +189,13 @@ typedef enum {
 	OPERATION_SUBTRACTION,
 	OPERATION_CONCATENATION,
 	OPERATION_EQUALITY,
+	OPERATION_LT,
+	OPERATION_GT,
+	OPERATION_LTE,
+	OPERATION_GTE,
 } OperationType;
 
-const int OPERATION_PRECEDENCE[] = {0, 1, 1, 1, 2, 2, 3, 4};
+const int OPERATION_PRECEDENCE[] = {0, 1, 1, 1, 2, 2, 3, 4, 5, 5, 5, 5};
 
 typedef struct Operation {
 	OperationType type;
@@ -415,6 +419,18 @@ void Element_print(Element *e) {
 					case OPERATION_REMAINDER:
 						fputs("%", stdout);
 						break;
+					case OPERATION_LT:
+						fputs("<", stdout);
+						break;
+					case OPERATION_GT:
+						fputs(">", stdout);
+						break;
+					case OPERATION_LTE:
+						fputs("<=", stdout);
+						break;
+					case OPERATION_GTE:
+						fputs(">=", stdout);
+						break;
 				}
 				if (o->b != NULL) {
 					putchar(' ');
@@ -578,6 +594,31 @@ Number* Number_operate(OperationType ot, Number *na, Number *nb) {
 				result->value_long = na->value_long % nb->value_long;
 			}
 			break;
+		case OPERATION_LT:
+		case OPERATION_GT:
+			if (ot == OPERATION_GT) {
+				Number *temp = na;
+				na = nb;
+				nb = temp;
+			}
+			result->is_double = false;
+			result->value_long =
+				(na->is_double ? na->value_double : na->value_long) <
+				(nb->is_double ? nb->value_double : nb->value_long);
+			break;
+		case OPERATION_LTE:
+		case OPERATION_GTE:
+			if (ot == OPERATION_GTE) {
+				Number *temp = na;
+				na = nb;
+				nb = temp;
+			}
+			result->is_double = false;
+			result->value_long =
+				(na->is_double ? na->value_double : na->value_long) <=
+				(nb->is_double ? nb->value_double : nb->value_long);
+			break;
+
 	}
 
 	return result;
@@ -804,6 +845,9 @@ Stack* tokenise(String *script, Stack **heap) {
 				case '/':
 				case '%':
 				case '=':
+				case '<':
+				case '>':
+				case '!':
 					new_type = ELEMENT_OPERATION;
 					break;
 				case '.':
@@ -874,24 +918,26 @@ Stack* tokenise(String *script, Stack **heap) {
 
 						if (String_is(current_value, "+")) {
 							o->type = OPERATION_ADDITION;
-						}
-						if (String_is(current_value, "-")) {
+						} else if (String_is(current_value, "-")) {
 							o->type = OPERATION_SUBTRACTION;
-						}
-						if (String_is(current_value, "*")) {
+						} else if (String_is(current_value, "*")) {
 							o->type = OPERATION_MULTIPLICATION;
-						}
-						if (String_is(current_value, "/")) {
+						} else if (String_is(current_value, "/")) {
 							o->type = OPERATION_DIVISION;
-						}
-						if (String_is(current_value, "%")) {
+						} else if (String_is(current_value, "%")) {
 							o->type = OPERATION_REMAINDER;
-						}
-						if (String_is(current_value, "==")) {
+						} else if (String_is(current_value, "==")) {
 							o->type = OPERATION_EQUALITY;
-						}
-						if (String_is(current_value, "..")) {
+						} else if (String_is(current_value, "..")) {
 							o->type = OPERATION_CONCATENATION;
+						} else if (String_is(current_value, "<")) {
+							o->type = OPERATION_LT;
+						} else if (String_is(current_value, ">")) {
+							o->type = OPERATION_GT;
+						} else if (String_is(current_value, "<=")) {
+							o->type = OPERATION_LTE;
+						} else if (String_is(current_value, ">=")) {
+							o->type = OPERATION_GTE;
 						}
 
 						new_token->value = o;
@@ -1240,6 +1286,19 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					}
 
+					if (String_is(command->value, "bruh")) {
+						if (statement->length != 2) {
+							bruh("'bruh' command accepts exactly 1 argument");
+						}
+
+						Element *to_bruh = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+
+						fputs("ERROR: ", stdout);
+						String_print(to_bruh->value);
+						putchar('\n');
+						exit(1);
+					}
+
 					garbage_collect(NULL, ast_root, scopes_stack, heap);
 				}
 
@@ -1305,6 +1364,10 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							n->value_long = Element_compare(a, b) ? 1 : 0;
 							return make(ELEMENT_NUMBER, n, heap);
 						};
+					case OPERATION_LT:
+					case OPERATION_GT:
+					case OPERATION_LTE:
+					case OPERATION_GTE:
 					case OPERATION_ADDITION:
 					case OPERATION_SUBTRACTION:
 					case OPERATION_MULTIPLICATION:

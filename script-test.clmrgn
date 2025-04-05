@@ -1,10 +1,21 @@
-let my_struct {
-	let "x" {
-		let "z" 4;
+function factorial x {
+	let result 0;
+
+	if (x < 0) {
+		bruh "can't take the factorial of a negative number or non-integer";
 	};
-	let "y" 3;
+
+	if (x == 0) {
+		set result 1;
+	} {
+		set result (x * factorial (x - 1));
+	};
+
+	return result;
 };
 
-mut (my_struct "x") "z" (my_struct);
-
-print (my_struct "x" "z" "x" "z" "y");
+print (factorial 6);
+print (factorial 3);
+print (factorial 2);
+print (factorial 1);
+print (factorial 0);
