@@ -122,6 +122,8 @@ typedef enum {
 
 	ELEMENT_SCOPE,
 	ELEMENT_SCOPE_COLLECTION,
+	ELEMENT_FUNCTION,
+	ELEMENT_CLOSURE,
 } ElementType;
 
 typedef struct Element {
@@ -138,6 +140,32 @@ Element* Element_new(ElementType type, void *value) {
 	e->gc_checked = false;
 	e->value = value;
 	return e;
+}
+
+typedef struct Function {
+	Element *expression;
+	Element *variable;
+} Function;
+
+Function* Function_new(Element *expression, Element *variable) {
+	Function *f = malloc(sizeof(Function));
+	f->expression = expression;
+	f->variable = variable;
+	return f;
+}
+
+typedef struct Closure {
+	Element *expression;
+	Element *variable;
+	Element *scopes;
+} Closure;
+
+Closure* Closure_new(Element *expression, Element *variable, Element *scopes) {
+	Closure *c = malloc(sizeof(Closure));
+	c->expression = expression;
+	c->variable = variable;
+	c->scopes = scopes;
+	return c;
 }
 
 /*
@@ -457,6 +485,8 @@ void Element_nuke(Element *e) {
 		case ELEMENT_SCOPE:
 		case ELEMENT_OPERATION:
 		case ELEMENT_SCOPE_COLLECTION:
+		case ELEMENT_FUNCTION:
+		case ELEMENT_CLOSURE:
 			free(e->value);
 			break;
 		case ELEMENT_SEQUENCE:
@@ -944,7 +974,7 @@ Element* heaper(Element *e, bool gc_checked, Stack **heap) {
 				for (size_t y = 0; y < sequence->length; y++) {
 					Stack *statement = sequence->content[y];
 
-					for (size_t x = 0; x < sequence->length; x++) {
+					for (size_t x = 0; x < statement->length; x++) {
 						heaper(statement->content[x], gc_checked, heap);
 					}
 				}
@@ -967,6 +997,21 @@ Element* heaper(Element *e, bool gc_checked, Stack **heap) {
 				for (size_t i = 0; i < scopes->length; i++) {
 					heaper(scopes->content[i], gc_checked, heap);
 				}
+			};
+			break;
+		case ELEMENT_FUNCTION:
+			{
+				Function *f = e->value;
+				heaper(f->expression, gc_checked, heap);
+				heaper(f->variable, gc_checked, heap);
+			};
+			break;
+		case ELEMENT_CLOSURE:
+			{
+				Closure *c = e->value;
+				heaper(c->expression, gc_checked, heap);
+				heaper(c->variable, gc_checked, heap);
+				heaper(c->scopes, gc_checked, heap);
 			};
 			break;
 	}
@@ -1013,6 +1058,26 @@ void Element_discard(Element *e) {
 	}
 
 	free(heap);
+}
+
+void setvar(Element *key, Element *value, Element *scopes, bool local) {
+	Stack *scope_collection = scopes->value;
+
+	Element *scope;
+
+	if (local) {
+		scope = scope_collection->content[scope_collection->length - 1];
+	} else {
+		for (size_t i = 0; i < scope_collection->length; i++) {
+			scope = scope_collection->content[i];
+
+			if (i == scope_collection->length - 1 || Scope_has(scope->value, key)) {
+				break;
+			}
+		}
+	}
+
+	scope->value = Scope_set(scope->value, key, value);
 }
 
 Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack, Stack **heap) {
@@ -1093,6 +1158,88 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						return result;
 					}
 
+					if (String_is(command->value, "function")) {
+						if (statement->length < 3) {
+							bruh("'function' command acccepts at least 2 arguments");
+						}
+
+						Element *expression = statement->content[statement->length - 1];
+
+						if (statement->length == 3) {
+								expression = make(ELEMENT_FUNCTION, Function_new(expression, NULL), heap);
+						} else {
+							for (size_t i = statement->length - 2; i >= 2; i--) {
+								expression = make(ELEMENT_FUNCTION, Function_new(expression, statement->content[i]), heap);
+							}
+						}
+
+						Element *final_closure = evaluate_expression(expression, ast_root, scopes_stack, heap);
+
+						setvar(statement->content[1], final_closure, scopes, true);
+					}
+
+					{
+						bool letting = String_is(command->value, "let");
+						bool setting = String_is(command->value, "set");
+
+						if (letting || setting) {
+							if (statement->length != 3) {
+								if (letting) {
+									bruh("'let' command accepts exactly 2 arguments");
+								} else {
+									bruh("'set' command accepts exactly 2 arguments");
+								}
+							}
+
+							Element *key = statement->content[1];
+
+							Element *value = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
+
+							setvar(key, value, scopes, letting);
+						}
+					};
+
+					if (String_is(command->value, "mut")) {
+						if (statement->length != 4) {
+							bruh("'mut' command accepts exactly 3 arguments");
+						}
+
+						Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+						Element *key = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
+						Element *value = evaluate_expression(statement->content[3], ast_root, scopes_stack, heap);
+
+						subject->value = Scope_set(subject->value, key, value);
+					}
+
+					if (String_is(command->value, "if")) {
+						if (statement->length < 2) {
+							bruh("'if' command accepts at least 1 argument");
+						}
+
+						for (size_t i = 1; i < statement->length; i += 2) {
+							if (i == statement->length - 1) {
+								evaluate_expression(statement->content[i], ast_root, scopes_stack, heap);
+							} else {
+								Element *condition = evaluate_expression(statement->content[i], ast_root, scopes_stack, heap);
+
+								if (Element_is_truthy(condition)) {
+									evaluate_expression(statement->content[i + 1], ast_root, scopes_stack, heap);
+									break;
+								}
+							}
+						}
+					}
+
+					if (String_is(command->value, "while")) {
+						if (statement->length != 3) {
+							bruh("'while' command accepts exactly 2 arguments");
+						}
+
+						while (Element_is_truthy(evaluate_expression(statement->content[1], ast_root, scopes_stack, heap))) {
+							evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
+						}
+					}
+
 					garbage_collect(NULL, ast_root, scopes_stack, heap);
 				}
 
@@ -1111,6 +1258,34 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 				switch (o->type) {
 					case OPERATION_APPLICATION:
 						switch (a->type) {
+							case ELEMENT_CLOSURE:
+								{
+									Closure *c = a->value;
+
+									Stack *scopes = c->scopes->value;
+
+									Element *new_scopes = make(ELEMENT_SCOPE_COLLECTION, Stack_new(), heap);
+
+									for (size_t i = 0; i < scopes->length; i++) {
+										new_scopes->value = Stack_push(new_scopes->value, scopes->content[i]);
+									}
+
+									if (c->variable != NULL) {
+										Element *scope = make(ELEMENT_SCOPE, Scope_new(), heap);
+
+										new_scopes->value = Stack_push(new_scopes->value, scope);
+
+										scope->value = Scope_set(scope->value, c->variable, b);
+									}
+
+									*scopes_stack = Stack_push(*scopes_stack, new_scopes);
+
+									Element *result = evaluate_expression(c->expression, ast_root, scopes_stack, heap);
+
+									*scopes_stack = Stack_pop(*scopes_stack);
+
+									return result;
+								};
 							case ELEMENT_NUMBER:
 								return make(ELEMENT_NUMBER, Number_operate(OPERATION_MULTIPLICATION, a->value, b->value), heap);
 							case ELEMENT_SCOPE:
@@ -1175,6 +1350,11 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 				}
 
 				bruh("variable not found");
+			};
+		case ELEMENT_FUNCTION:
+			{
+				Function *f = e->value;
+				return make(ELEMENT_CLOSURE, Closure_new(f->expression, f->variable, scopes), heap);
 			};
 		default:
 			return e;

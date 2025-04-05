@@ -1,1 +1,10 @@
-print "Hello, world!";
+let my_struct {
+	let "x" {
+		let "z" 4;
+	};
+	let "y" 3;
+};
+
+mut (my_struct "x") "z" (my_struct);
+
+print (my_struct "x" "z" "x" "z" "y");
