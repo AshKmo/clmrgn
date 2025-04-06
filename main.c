@@ -182,20 +182,27 @@ Closure* Closure_new(Element *expression, Element *variable, Element *scopes) {
 // TODO: add more operators
 typedef enum {
 	OPERATION_APPLICATION,
+	OPERATION_POW,
 	OPERATION_MULTIPLICATION,
 	OPERATION_DIVISION,
 	OPERATION_REMAINDER,
 	OPERATION_ADDITION,
 	OPERATION_SUBTRACTION,
+	OPERATION_SHIFT_LEFT,
+	OPERATION_SHIFT_RIGHT,
 	OPERATION_CONCATENATION,
-	OPERATION_EQUALITY,
 	OPERATION_LT,
 	OPERATION_GT,
 	OPERATION_LTE,
 	OPERATION_GTE,
+	OPERATION_EQUALITY,
+	OPERATION_INEQUALITY,
+	OPERATION_AND,
+	OPERATION_XOR,
+	OPERATION_OR,
 } OperationType;
 
-const int OPERATION_PRECEDENCE[] = {0, 1, 1, 1, 2, 2, 3, 4, 5, 5, 5, 5};
+const int OPERATION_PRECEDENCE[] = {0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 6, 7, 7, 8, 9, 10};
 
 typedef struct Operation {
 	OperationType type;
@@ -375,6 +382,7 @@ Scope* Scope_delete(Scope *s, Element *key) {
 	return s;
 }
 
+// TODO: add missing operators and types
 void Element_print(Element *e) {
 	switch (e->type) {
 		case ELEMENT_NUMBER:
@@ -593,6 +601,12 @@ Number* Number_operate(OperationType ot, Number *na, Number *nb) {
 			} else {
 				result->value_long = na->value_long % nb->value_long;
 			}
+			break;
+		case OPERATION_POW:
+			result->is_double = true;
+			double da = na->is_double ? na->value_double : na->value_long;
+			double db = nb->is_double ? nb->value_double : nb->value_long;
+			result->value_double = pow(da, db);
 			break;
 		case OPERATION_LT:
 		case OPERATION_GT:
@@ -847,6 +861,9 @@ Stack* tokenise(String *script, Stack **heap) {
 				case '=':
 				case '<':
 				case '>':
+				case '&':
+				case '|':
+				case '^':
 				case '!':
 					new_type = ELEMENT_OPERATION;
 					break;
@@ -938,6 +955,20 @@ Stack* tokenise(String *script, Stack **heap) {
 							o->type = OPERATION_LTE;
 						} else if (String_is(current_value, ">=")) {
 							o->type = OPERATION_GTE;
+						} else if (String_is(current_value, "!=")) {
+							o->type = OPERATION_INEQUALITY;
+						} else if (String_is(current_value, "<<")) {
+							o->type = OPERATION_SHIFT_LEFT;
+						} else if (String_is(current_value, ">>")) {
+							o->type = OPERATION_SHIFT_RIGHT;
+						} else if (String_is(current_value, "&")) {
+							o->type = OPERATION_AND;
+						} else if (String_is(current_value, "|")) {
+							o->type = OPERATION_OR;
+						} else if (String_is(current_value, "^")) {
+							o->type = OPERATION_XOR;
+						} else if (String_is(current_value, "**")) {
+							o->type = OPERATION_POW;
 						}
 
 						new_token->value = o;
@@ -1002,7 +1033,17 @@ Element* heaper(Element *e, bool gc_checked, Stack **heap) {
 	e->gc_checked = gc_checked;
 
 	if (heap != NULL) {
-		*heap = Stack_push(*heap, e);
+		size_t i = 0;
+
+		for (; i < (*heap)->length; i++) {
+			if ((*heap)->content[i] == e) {
+				break;
+			}
+		}
+
+		if (i == (*heap)->length) {
+			*heap = Stack_push(*heap, e);
+		}
 	}
 
 	switch (e->type) {
@@ -1359,9 +1400,44 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 								bruh("application cannot be applied to this type");
 						}
 					case OPERATION_EQUALITY:
+					case OPERATION_INEQUALITY:
 						{
 							Number *n = Number_new();
-							n->value_long = Element_compare(a, b) ? 1 : 0;
+							n->value_long = (Element_compare(a, b) != (o->type == OPERATION_INEQUALITY)) ? 1 : 0;
+							return make(ELEMENT_NUMBER, n, heap);
+						};
+					case OPERATION_SHIFT_LEFT:
+					case OPERATION_SHIFT_RIGHT:
+					case OPERATION_AND:
+					case OPERATION_OR:
+					case OPERATION_XOR:
+						{
+							if (a->type != ELEMENT_NUMBER || b->type != ELEMENT_NUMBER) {
+								bruh("only integers may be shifted, ANDed, ORed or XORed");
+							}
+							Number *na = a->value;
+							Number *nb = b->value;
+							if (na->is_double || nb->is_double) {
+								bruh("only integers may be shifted, ANDed, ORed or XORed");
+							}
+							Number *n = Number_new();
+							switch (o->type) {
+								case OPERATION_SHIFT_LEFT:
+									n->value_long = na->value_long << nb->value_long;
+									break;
+								case OPERATION_SHIFT_RIGHT:
+									n->value_long = na->value_long >> nb->value_long;
+									break;
+								case OPERATION_AND:
+									n->value_long = na->value_long & nb->value_long;
+									break;
+								case OPERATION_OR:
+									n->value_long = na->value_long | nb->value_long;
+									break;
+								case OPERATION_XOR:
+									n->value_long = na->value_long ^ nb->value_long;
+									break;
+							}
 							return make(ELEMENT_NUMBER, n, heap);
 						};
 					case OPERATION_LT:
@@ -1373,6 +1449,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_MULTIPLICATION:
 					case OPERATION_DIVISION:
 					case OPERATION_REMAINDER:
+					case OPERATION_POW:
 						if (a->type != ELEMENT_NUMBER || b->type != ELEMENT_NUMBER) {
 							bruh("numeric operation applied to non-numeric value");
 						}
@@ -1412,6 +1489,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					}
 				}
 
+				putchar('\n');
+				String_print(e->value);
 				bruh("variable not found");
 			};
 		case ELEMENT_FUNCTION:
