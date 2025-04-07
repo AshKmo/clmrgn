@@ -1206,7 +1206,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						bool showing = !handled && String_is(command->value, "show") && (handled = true);
 						bool displaying = !handled && String_is(command->value, "display") && (handled = true);
 
-						if (printing || writing || showing || displaying) {
+						if (handled) {
 							if (statement->length < 2) {
 								if (writing) {
 									bruh("'write' command accepts at least 1 argument");
@@ -1299,7 +1299,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						bool letting = !handled && String_is(command->value, "let") && (handled = true);
 						bool setting = !handled && String_is(command->value, "set") && (handled = true);
 
-						if (letting || setting) {
+						if (handled) {
 							if (statement->length != 3) {
 								if (letting) {
 									bruh("'let' command accepts exactly 2 arguments");
