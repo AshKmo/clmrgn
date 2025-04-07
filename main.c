@@ -203,9 +203,10 @@ typedef enum {
 	OPERATION_AND,
 	OPERATION_XOR,
 	OPERATION_OR,
+	OPERATION_CLOSURE,
 } OperationType;
 
-const int OPERATION_PRECEDENCE[] = {0, 1, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 8, 8, 8, 9, 9, 10, 11, 12};
+const int OPERATION_PRECEDENCE[] = {0, 1, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 8, 8, 8, 9, 9, 10, 11, 12, 13};
 
 typedef struct Operation {
 	OperationType type;
@@ -1012,6 +1013,8 @@ Stack* tokenise(String *script, Stack **heap) {
 							o->type = OPERATION_SUBL;
 						} else if (String_is(current_value, ".")) {
 							o->type = OPERATION_ACCESS;
+						} else if (String_is(current_value, "=>")) {
+							o->type = OPERATION_CLOSURE;
 						}
 
 						new_token->value = o;
@@ -1151,7 +1154,7 @@ Element* heaper(Element *e, bool gc_checked, Stack **heap) {
 	return e;
 }
 
-void garbage_collect(Element *result, Element *ast_root, Stack **scopes_stack, Stack **heap) {
+void garbage_collect(Element *result, Element *ast_root, Stack **scopes_stack, Stack **heap, Stack **call_stack) {
 	if (result != NULL) {
 		heaper(result, true, NULL);
 	}
@@ -1163,6 +1166,12 @@ void garbage_collect(Element *result, Element *ast_root, Stack **scopes_stack, S
 	if (scopes_stack != NULL) {
 		for (size_t i = 0; i < (*scopes_stack)->length; i++) {
 			heaper((*scopes_stack)->content[i], true, NULL);
+		}
+	}
+
+	if (call_stack != NULL) {
+		for (size_t i = 0; i < (*call_stack)->length; i++) {
+			heaper((*call_stack)->content[i], true, NULL);
 		}
 	}
 
@@ -1210,9 +1219,60 @@ void setvar(Element *key, Element *value, Element *scopes, bool local) {
 	scope->value = Scope_set(scope->value, key, value);
 }
 
+Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack, Stack **heap, Stack **call_stack);
+
+Element* apply(Element *a, Element *b, Element *ast_root, Stack **scopes_stack, Stack **heap, Stack **call_stack) {
+	switch (a->type) {
+		case ELEMENT_CLOSURE:
+			{
+				Closure *c = a->value;
+
+				Stack *scopes = c->scopes->value;
+
+				Element *new_scopes = make(ELEMENT_SCOPE_COLLECTION, Stack_new(), heap);
+
+				for (size_t i = 0; i < scopes->length; i++) {
+					new_scopes->value = Stack_push(new_scopes->value, scopes->content[i]);
+				}
+
+				if (c->variable != NULL) {
+					Element *scope = make(ELEMENT_SCOPE, Scope_new(), heap);
+
+					new_scopes->value = Stack_push(new_scopes->value, scope);
+
+					scope->value = Scope_set(scope->value, c->variable, b);
+				}
+
+				*scopes_stack = Stack_push(*scopes_stack, new_scopes);
+
+				*call_stack = Stack_push(*call_stack, a);
+
+				Element *result = evaluate_expression(c->expression, ast_root, scopes_stack, heap, call_stack);
+
+				*call_stack = Stack_pop(*call_stack);
+
+				*scopes_stack = Stack_pop(*scopes_stack);
+
+				return result;
+			};
+		case ELEMENT_NUMBER:
+			return make(ELEMENT_NUMBER, Number_operate(OPERATION_MULTIPLICATION, a->value, b->value), heap);
+		case ELEMENT_SCOPE:
+			{
+				Element *result = Scope_get(a->value, b);
+				if (result == NULL) {
+					bruh("no such key in scope");
+				}
+				return Scope_get(a->value, b);
+			};
+		default:
+			bruh("application cannot be applied to this type");
+	}
+}
+
 Element* eval(String*, Element*);
 
-Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack, Stack **heap) {
+Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack, Stack **heap, Stack **call_stack) {
 	Element *scopes = (*scopes_stack)->content[(*scopes_stack)->length - 1];
 
 	switch (e->type) {
@@ -1239,7 +1299,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						handled = true;
 
 						for (size_t x = 1; x < statement->length; x++) {
-							evaluate_expression(statement->content[x], ast_root, scopes_stack, heap);
+							evaluate_expression(statement->content[x], ast_root, scopes_stack, heap, call_stack);
 						}
 					}
 
@@ -1263,7 +1323,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							}
 
 							for (size_t x = 1; x < statement->length; x++) {
-								Element *to_print = evaluate_expression(statement->content[x], ast_root, scopes_stack, heap);
+								Element *to_print = evaluate_expression(statement->content[x], ast_root, scopes_stack, heap, call_stack);
 
 								if ((writing || printing) && to_print->type == ELEMENT_STRING) {
 									String_print(to_print->value);
@@ -1289,7 +1349,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("'return' command accepts exactly 1 argument");
 						}
 
-						Element *result = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+						Element *result = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
 
 						scopes->value = Stack_pop(scopes->value);
 
@@ -1303,7 +1363,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("'eval' command accepts exactly 1 argument");
 						}
 
-						Element *script = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+						Element *script = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
 
 						if (script->type != ELEMENT_STRING) {
 							bruh("'eval' command only accepts a string as an argument");
@@ -1333,7 +1393,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							}
 						}
 
-						Element *final_closure = evaluate_expression(expression, ast_root, scopes_stack, heap);
+						Element *final_closure = evaluate_expression(expression, ast_root, scopes_stack, heap, call_stack);
 
 						setvar(statement->content[1], final_closure, scopes, true);
 					}
@@ -1353,7 +1413,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 
 							Element *key = statement->content[1];
 
-							Element *value = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
+							Element *value = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
 
 							setvar(key, value, scopes, letting);
 						}
@@ -1366,9 +1426,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("'mut' command accepts exactly 3 arguments");
 						}
 
-						Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
-						Element *key = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
-						Element *value = evaluate_expression(statement->content[3], ast_root, scopes_stack, heap);
+						Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
+						Element *key = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
+						Element *value = evaluate_expression(statement->content[3], ast_root, scopes_stack, heap, call_stack);
 
 						subject->value = Scope_set(subject->value, key, value);
 					}
@@ -1382,12 +1442,12 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 
 						for (size_t i = 1; i < statement->length; i += 2) {
 							if (i == statement->length - 1) {
-								evaluate_expression(statement->content[i], ast_root, scopes_stack, heap);
+								evaluate_expression(statement->content[i], ast_root, scopes_stack, heap, call_stack);
 							} else {
-								Element *condition = evaluate_expression(statement->content[i], ast_root, scopes_stack, heap);
+								Element *condition = evaluate_expression(statement->content[i], ast_root, scopes_stack, heap, call_stack);
 
 								if (Element_is_truthy(condition)) {
-									evaluate_expression(statement->content[i + 1], ast_root, scopes_stack, heap);
+									evaluate_expression(statement->content[i + 1], ast_root, scopes_stack, heap, call_stack);
 									break;
 								}
 							}
@@ -1401,8 +1461,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("'while' command accepts exactly 2 arguments");
 						}
 
-						while (Element_is_truthy(evaluate_expression(statement->content[1], ast_root, scopes_stack, heap))) {
-							evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
+						while (Element_is_truthy(evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack))) {
+							evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
 						}
 					}
 
@@ -1413,13 +1473,13 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("'each' command accepts exactly 2 arguments");
 						}
 
-						Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+						Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
 
 						if (subject->type != ELEMENT_SCOPE) {
 							bruh("first argument of 'each' command must be a Scope object");
 						}
 
-						Element *function = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
+						Element *function = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
 
 						Scope *s = subject->value;
 
@@ -1428,11 +1488,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 								continue;
 							}
 
-							evaluate_expression(make(ELEMENT_OPERATION, Operation_new(
-											OPERATION_APPLICATION,
-											function,
-											s->maps[i].key), heap
-										), ast_root, scopes_stack, heap);
+							apply(function, s->maps[i].key, ast_root, scopes_stack, heap, call_stack);
 						}
 					}
 
@@ -1443,7 +1499,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("'bruh' command accepts exactly 1 argument");
 						}
 
-						Element *to_bruh = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+						Element *to_bruh = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
 
 						fputs("ERROR: ", stdout);
 						String_print(to_bruh->value);
@@ -1451,7 +1507,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						exit(1);
 					}
 
-					garbage_collect(NULL, ast_root, scopes_stack, heap);
+					garbage_collect(NULL, ast_root, scopes_stack, heap, call_stack);
 				}
 
 				scopes->value = Stack_pop(scopes->value);
@@ -1466,55 +1522,14 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 				switch (o->type) {
 					case OPERATION_APPLICATION:
 						{
-							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
-							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap, call_stack);
 
-							switch (a->type) {
-								case ELEMENT_CLOSURE:
-									{
-										Closure *c = a->value;
-
-										Stack *scopes = c->scopes->value;
-
-										Element *new_scopes = make(ELEMENT_SCOPE_COLLECTION, Stack_new(), heap);
-
-										for (size_t i = 0; i < scopes->length; i++) {
-											new_scopes->value = Stack_push(new_scopes->value, scopes->content[i]);
-										}
-
-										if (c->variable != NULL) {
-											Element *scope = make(ELEMENT_SCOPE, Scope_new(), heap);
-
-											new_scopes->value = Stack_push(new_scopes->value, scope);
-
-											scope->value = Scope_set(scope->value, c->variable, b);
-										}
-
-										*scopes_stack = Stack_push(*scopes_stack, new_scopes);
-
-										Element *result = evaluate_expression(c->expression, ast_root, scopes_stack, heap);
-
-										*scopes_stack = Stack_pop(*scopes_stack);
-
-										return result;
-									};
-								case ELEMENT_NUMBER:
-									return make(ELEMENT_NUMBER, Number_operate(OPERATION_MULTIPLICATION, a->value, b->value), heap);
-								case ELEMENT_SCOPE:
-									{
-										Element *result = Scope_get(a->value, b);
-										if (result == NULL) {
-											bruh("no such key in scope");
-										}
-										return Scope_get(a->value, b);
-									};
-								default:
-									bruh("application cannot be applied to this type");
-							}
+							return apply(a, b, ast_root, scopes_stack, heap, call_stack);
 						};
 					case OPERATION_ACCESS:
 						{
-							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
 
 							Element *result = Scope_get(a->value, o->b);
 
@@ -1523,8 +1538,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_EQUALITY:
 					case OPERATION_INEQUALITY:
 						{
-							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
-							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap, call_stack);
 
 							Number *n = Number_new();
 							n->value_long = (Element_compare(a, b) != (o->type == OPERATION_INEQUALITY)) ? 1 : 0;
@@ -1536,8 +1551,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_OR:
 					case OPERATION_XOR:
 						{
-							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
-							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap, call_stack);
 
 							if (a->type != ELEMENT_NUMBER || b->type != ELEMENT_NUMBER) {
 								bruh("only integers may be shifted, ANDed, ORed or XORed");
@@ -1577,8 +1592,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_DIVISION:
 					case OPERATION_REMAINDER:
 					case OPERATION_POW:
-						Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
-						Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+						Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
+						Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap, call_stack);
 
 						if (a->type != ELEMENT_NUMBER || b->type != ELEMENT_NUMBER) {
 							bruh("numeric operation applied to non-numeric value");
@@ -1587,8 +1602,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_SUBL:
 					case OPERATION_SUBG:
 						{
-							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
-							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap, call_stack);
 
 							if (a->type != ELEMENT_STRING || b->type != ELEMENT_NUMBER) {
 								bruh("substring operations must be applied to a string and a number in that order");
@@ -1630,8 +1645,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						};
 					case OPERATION_CONCATENATION:
 						{
-							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
-							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap, call_stack);
 
 							if (a->type != ELEMENT_STRING || b->type != ELEMENT_STRING) {
 								bruh("string concatenation applied to non-string value");
@@ -1652,6 +1667,8 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 
 							return make(ELEMENT_STRING, result, heap);
 						};
+					case OPERATION_CLOSURE:
+						return make(ELEMENT_CLOSURE, Closure_new(o->b, o->a, scopes), heap);
 				}
 			};
 			break;
@@ -1711,6 +1728,7 @@ Element* eval(String *script, Element *scopes) {
 	Element *result;
 	{
 		Stack *scopes_stack = Stack_new();
+		Stack *call_stack = Stack_new();
 
 		if (scopes == NULL) {
 			scopes_stack = Stack_push(scopes_stack, make(ELEMENT_SCOPE_COLLECTION, Stack_new(), &heap));
@@ -1718,12 +1736,13 @@ Element* eval(String *script, Element *scopes) {
 			scopes_stack = Stack_push(scopes_stack, scopes);
 		}
 
-		result = evaluate_expression(ast_root, ast_root, &scopes_stack, &heap);
+		result = evaluate_expression(ast_root, ast_root, &scopes_stack, &heap, &call_stack);
 
 		free(scopes_stack);
+		free(call_stack);
 	};
 
-	garbage_collect(result, NULL, NULL, &heap);
+	garbage_collect(result, NULL, NULL, &heap, NULL);
 
 	free(heap);
 
