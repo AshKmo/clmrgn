@@ -1167,6 +1167,8 @@ void setvar(Element *key, Element *value, Element *scopes, bool local) {
 	scope->value = Scope_set(scope->value, key, value);
 }
 
+Element* eval(String*, Element*);
+
 Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack, Stack **heap) {
 	Element *scopes = (*scopes_stack)->content[(*scopes_stack)->length - 1];
 
@@ -1188,17 +1190,21 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						bruh("command name must be a keyword");
 					}
 
-					if (String_is(command->value, "do")) {
+					bool handled = false;
+
+					if (!handled && String_is(command->value, "do")) {
+						handled = true;
+
 						for (size_t x = 1; x < statement->length; x++) {
 							evaluate_expression(statement->content[x], ast_root, scopes_stack, heap);
 						}
 					}
 
-					{
-						bool writing = String_is(command->value, "write");
-						bool printing = String_is(command->value, "print");
-						bool showing = String_is(command->value, "show");
-						bool displaying = String_is(command->value, "display");
+					if (!handled) {
+						bool writing = !handled && String_is(command->value, "write") && (handled = true);
+						bool printing = !handled && String_is(command->value, "print") && (handled = true);
+						bool showing = !handled && String_is(command->value, "show") && (handled = true);
+						bool displaying = !handled && String_is(command->value, "display") && (handled = true);
 
 						if (printing || writing || showing || displaying) {
 							if (statement->length < 2) {
@@ -1233,7 +1239,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					};
 
-					if (String_is(command->value, "return")) {
+					if (!handled && String_is(command->value, "return")) {
+						handled = true;
+
 						if (statement->length != 2) {
 							bruh("'return' command accepts exactly 1 argument");
 						}
@@ -1245,7 +1253,29 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						return result;
 					}
 
-					if (String_is(command->value, "function")) {
+					if (!handled && String_is(command->value, "eval")) {
+						handled = true;
+
+						if (statement->length != 2) {
+							bruh("'eval' command accepts exactly 1 argument");
+						}
+
+						Element *script = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+
+						if (script->type != ELEMENT_STRING) {
+							bruh("'eval' command only accepts a string as an argument");
+						}
+
+						Element *result = heaper(eval(script->value, scopes), false, heap);
+
+						scopes->value = Stack_pop(scopes->value);
+
+						return result;
+					}
+
+					if (!handled && String_is(command->value, "function")) {
+						handled = true;
+
 						if (statement->length < 3) {
 							bruh("'function' command acccepts at least 2 arguments");
 						}
@@ -1265,9 +1295,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						setvar(statement->content[1], final_closure, scopes, true);
 					}
 
-					{
-						bool letting = String_is(command->value, "let");
-						bool setting = String_is(command->value, "set");
+					if (!handled) {
+						bool letting = !handled && String_is(command->value, "let") && (handled = true);
+						bool setting = !handled && String_is(command->value, "set") && (handled = true);
 
 						if (letting || setting) {
 							if (statement->length != 3) {
@@ -1286,7 +1316,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					};
 
-					if (String_is(command->value, "mut")) {
+					if (!handled && String_is(command->value, "mut")) {
+						handled = true;
+
 						if (statement->length != 4) {
 							bruh("'mut' command accepts exactly 3 arguments");
 						}
@@ -1298,7 +1330,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						subject->value = Scope_set(subject->value, key, value);
 					}
 
-					if (String_is(command->value, "if")) {
+					if (!handled && String_is(command->value, "if")) {
+						handled = true;
+
 						if (statement->length < 2) {
 							bruh("'if' command accepts at least 1 argument");
 						}
@@ -1317,7 +1351,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					}
 
-					if (String_is(command->value, "while")) {
+					if (!handled && String_is(command->value, "while")) {
+						handled = true;
+
 						if (statement->length != 3) {
 							bruh("'while' command accepts exactly 2 arguments");
 						}
@@ -1327,7 +1363,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					}
 
-					if (String_is(command->value, "bruh")) {
+					if (!handled && String_is(command->value, "bruh")) {
+						handled = true;
+
 						if (statement->length != 2) {
 							bruh("'bruh' command accepts exactly 1 argument");
 						}
