@@ -326,7 +326,7 @@ bool Element_is_truthy(Element *e) {
 			return n->value_long != 0;
 		}
 	}
-	
+
 	return true;
 }
 
@@ -410,6 +410,9 @@ void Element_print(Element *e, int indentation) {
 				}
 				switch (o->type) {
 					case OPERATION_APPLICATION:
+						break;
+					case OPERATION_APPLICATION_INFIX:
+						fputs("$", stdout);
 						break;
 					case OPERATION_ACCESS:
 						putchar('.');
@@ -572,7 +575,11 @@ void Element_print(Element *e, int indentation) {
 				Closure *c = e->value;
 
 				putchar('(');
-				Element_print(c->variable, indentation);
+				if (c->variable == NULL) {
+					putchar('?');
+				} else {
+					Element_print(c->variable, indentation);
+				}
 				fputs(" => ", stdout);
 				Element_print(c->expression, indentation);
 				putchar(')');
@@ -755,10 +762,10 @@ Element* operatify(Stack *expression, size_t start, size_t end, Stack **heap) {
 
 	if (final_operation == NULL) {
 		return make(ELEMENT_OPERATION, Operation_new(
-				OPERATION_APPLICATION,
-				operatify(expression, start, end - 1, heap),
-				expression->content[end - 1]
-				), heap);
+					OPERATION_APPLICATION,
+					operatify(expression, start, end - 1, heap),
+					expression->content[end - 1]
+					), heap);
 	}
 
 	final_operation->a = operatify(expression, start, op_location, heap);
@@ -1009,7 +1016,7 @@ Stack* tokenise(String *script, Stack **heap) {
 						char bc = current_value->content[0];
 
 						new_token->value = (void*)(uintptr_t)(bc == '}' || bc == ')');
-						
+
 						free(current_value);
 					};
 					break;
@@ -1434,7 +1441,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						Element *expression = statement->content[statement->length - 1];
 
 						if (statement->length == 3) {
-								expression = make(ELEMENT_FUNCTION, Function_new(expression, NULL), heap);
+							expression = make(ELEMENT_FUNCTION, Function_new(expression, NULL), heap);
 						} else {
 							for (size_t i = statement->length - 2; i >= 2; i--) {
 								expression = make(ELEMENT_FUNCTION, Function_new(expression, statement->content[i]), heap);
@@ -1743,7 +1750,12 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							}
 							Element *new_scopes_element = make(ELEMENT_SCOPE_COLLECTION, new_scopes, heap);
 
-							return make(ELEMENT_CLOSURE, Closure_new(o->b, o->a, new_scopes_element), heap);
+							Element *variable = NULL;
+							if (o->a->type != ELEMENT_NULL) {
+								variable = o->a;
+							}
+
+							return make(ELEMENT_CLOSURE, Closure_new(o->b, variable, new_scopes_element), heap);
 						};
 				}
 			};
@@ -1792,13 +1804,13 @@ Element* eval(String *script, Element *scopes) {
 	Stack *tokens = tokenise(script, &heap);
 
 	/*
-	putchar('\n');
-	for (size_t i = 0; i < tokens->length; i++) {
-		Element_print(tokens->content[i], 0);
-	}
-	putchar('\n');
-	putchar('\n');
-	*/
+	   putchar('\n');
+	   for (size_t i = 0; i < tokens->length; i++) {
+	   Element_print(tokens->content[i], 0);
+	   }
+	   putchar('\n');
+	   putchar('\n');
+	   */
 
 	Element *ast_root;
 	{
@@ -1809,10 +1821,10 @@ Element* eval(String *script, Element *scopes) {
 	free(tokens);
 
 	/*
-	Element_print(ast_root, 0);
-	putchar('\n');
-	putchar('\n');
-	*/
+	   Element_print(ast_root, 0);
+	   putchar('\n');
+	   putchar('\n');
+	   */
 
 	Element *result;
 	{
