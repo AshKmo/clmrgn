@@ -8,5 +8,10 @@ You should now be able to run `./bin/clmrgn <script>.clmrgn` to evaluate a clmrg
 
 To evaluate the pi calculation example script, run `./bin/clmrgn examples/pi.clmrgn`.
 
-## Docco?
-Cope.
+## Docco
+A clmrgn script starts as a Sequence, which contains a series of statements starting with a command:
+```
+let x "Hello, world!";
+print x;
+```
+Each statement must start with a command name end with a semicolon.

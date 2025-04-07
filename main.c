@@ -1456,17 +1456,25 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					if (!handled) {
 						bool letting = !handled && String_is(command->value, "let") && (handled = true);
 						bool setting = !handled && String_is(command->value, "set") && (handled = true);
+						bool selfmuting = !handled && String_is(command->value, "selfmut") && (handled = true);
 
 						if (handled) {
 							if (statement->length != 3) {
 								if (letting) {
 									bruh("'let' command accepts exactly 2 arguments");
-								} else {
+								} else if (setting) {
 									bruh("'set' command accepts exactly 2 arguments");
+								} else {
+									bruh("'selfmut' command accepts exactly 2 arguments");
 								}
 							}
 
-							Element *key = statement->content[1];
+							Element *key;
+							if (selfmuting) {
+								key = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
+							} else {
+								key = statement->content[1];
+							}
 
 							Element *value = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
 
