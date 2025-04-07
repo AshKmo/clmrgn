@@ -190,6 +190,8 @@ typedef enum {
 	OPERATION_SUBTRACTION,
 	OPERATION_SHIFT_LEFT,
 	OPERATION_SHIFT_RIGHT,
+	OPERATION_SUBL,
+	OPERATION_SUBG,
 	OPERATION_CONCATENATION,
 	OPERATION_LT,
 	OPERATION_GT,
@@ -202,7 +204,7 @@ typedef enum {
 	OPERATION_OR,
 } OperationType;
 
-const int OPERATION_PRECEDENCE[] = {0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 6, 7, 7, 8, 9, 10};
+const int OPERATION_PRECEDENCE[] = {0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 7, 7, 7, 8, 8, 9, 10, 11};
 
 typedef struct Operation {
 	OperationType type;
@@ -969,6 +971,10 @@ Stack* tokenise(String *script, Stack **heap) {
 							o->type = OPERATION_XOR;
 						} else if (String_is(current_value, "**")) {
 							o->type = OPERATION_POW;
+						} else if (String_is(current_value, ">/")) {
+							o->type = OPERATION_SUBG;
+						} else if (String_is(current_value, "</")) {
+							o->type = OPERATION_SUBL;
 						}
 
 						new_token->value = o;
@@ -1492,6 +1498,47 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("numeric operation applied to non-numeric value");
 						}
 						return make(ELEMENT_NUMBER, Number_operate(o->type, a->value, b->value), heap);
+					case OPERATION_SUBL:
+					case OPERATION_SUBG:
+						{
+							if (a->type != ELEMENT_STRING || b->type != ELEMENT_NUMBER) {
+								bruh("substring operations must be applied to a string and a number in that order");
+							}
+
+							String *s = a->value;
+							Number *n = b->value;
+
+							if (n->is_double || n->value_long < 0) {
+								bruh("substring operations must be applied to a string and a positive integer");
+							}
+
+							size_t length;
+							if (o->type == OPERATION_SUBL) {
+								if (n->value_long >= s->length) {
+									length = s->length;
+								} else {
+									length = n->value_long;
+								}
+							} else {
+								if (n->value_long >= s->length) {
+									length = 0;
+								} else {
+									length = s->length - n->value_long;
+								}
+							}
+
+							String *new_s = String_new(length);
+
+							for (size_t i = 0; i < length; i++) {
+								if (o->type == OPERATION_SUBL) {
+									new_s->content[i] = s->content[i];
+								} else {
+									new_s->content[i] = s->content[i + n->value_long];
+								}
+							}
+
+							return make(ELEMENT_STRING, new_s, heap);
+						};
 					case OPERATION_CONCATENATION:
 						{
 							if (a->type != ELEMENT_STRING || b->type != ELEMENT_STRING) {
