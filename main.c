@@ -1502,6 +1502,33 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					};
 
+					if (!handled) {
+						bool deleting = !handled && String_is(command->value, "del") && (handled = true);
+						bool delpropping = !handled && String_is(command->value, "delprop") && (handled = true);
+
+						if (handled) {
+							if (statement->length != 3) {
+								if (deleting) {
+									bruh("'del' command accepts exactly 2 arguments");
+								} else {
+									bruh("'delprop' command accepts exactly 2 arguments");
+								}
+							}
+
+							Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
+
+							Element *key;
+							if (deleting) {
+								key = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
+							} else {
+								key = statement->content[2];
+							}
+
+							subject->value = Scope_delete(subject->value, key);
+						}
+					};
+
+
 					if (!handled && String_is(command->value, "if")) {
 						handled = true;
 
