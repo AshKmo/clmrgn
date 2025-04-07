@@ -182,6 +182,7 @@ Closure* Closure_new(Element *expression, Element *variable, Element *scopes) {
 // TODO: add more operators
 typedef enum {
 	OPERATION_APPLICATION,
+	OPERATION_ACCESS,
 	OPERATION_POW,
 	OPERATION_MULTIPLICATION,
 	OPERATION_DIVISION,
@@ -204,7 +205,7 @@ typedef enum {
 	OPERATION_OR,
 } OperationType;
 
-const int OPERATION_PRECEDENCE[] = {0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 7, 7, 7, 8, 8, 9, 10, 11};
+const int OPERATION_PRECEDENCE[] = {0, 1, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 8, 8, 8, 9, 9, 10, 11, 12};
 
 typedef struct Operation {
 	OperationType type;
@@ -385,7 +386,7 @@ Scope* Scope_delete(Scope *s, Element *key) {
 }
 
 // TODO: add missing operators and types
-void Element_print(Element *e) {
+void Element_print(Element *e, int indentation) {
 	switch (e->type) {
 		case ELEMENT_NUMBER:
 			{
@@ -402,7 +403,7 @@ void Element_print(Element *e) {
 				Operation *o = e->value;
 				if (o->a != NULL) {
 					putchar('(');
-					Element_print(o->a);
+					Element_print(o->a, indentation);
 					putchar(' ');
 				}
 				switch (o->type) {
@@ -441,10 +442,13 @@ void Element_print(Element *e) {
 					case OPERATION_GTE:
 						fputs(">=", stdout);
 						break;
+					case OPERATION_POW:
+						fputs("**", stdout);
+						break;
 				}
 				if (o->b != NULL) {
 					putchar(' ');
-					Element_print(o->b);
+					Element_print(o->b, indentation);
 					putchar(')');
 				}
 			};
@@ -454,14 +458,26 @@ void Element_print(Element *e) {
 				Stack *sequence = e->value;
 
 				putchar('{');
+				putchar('\n');
 				for (size_t y = 0; y < sequence->length; y++) {
 					Stack *statement = sequence->content[y];
 
+					for (int x = 0; x < indentation + 1; x++) {
+						putchar('\t');
+					}
+
 					for (size_t x = 0; x < statement->length; x++) {
-						Element_print(statement->content[x]);
+						if (x > 0) {
+							putchar(' ');
+						}
+						Element_print(statement->content[x], indentation + 1);
 					}
 
 					putchar(';');
+					putchar('\n');
+				}
+				for (int x = 0; x < indentation; x++) {
+					putchar('\t');
 				}
 				putchar('}');
 
@@ -469,7 +485,6 @@ void Element_print(Element *e) {
 			};
 		case ELEMENT_VARIABLE:
 			String_print(e->value);
-			putchar(' ');
 			break;
 		case ELEMENT_STRING:
 			putchar('"');
@@ -498,7 +513,27 @@ void Element_print(Element *e) {
 			putchar(';');
 			break;
 		case ELEMENT_SCOPE:
-			puts("{...}");
+			{
+				Scope *s = e->value;
+
+				putchar('{');
+				putchar('\n');
+				for (size_t i = 0; i < s->length; i++) {
+					for (int i = 0; i < indentation; i++) {
+						putchar('\t');
+					}
+					fputs("\tlet ", stdout);
+					Element_print(s->maps[i].key, indentation + 1);
+					putchar(' ');
+					Element_print(s->maps[i].value, indentation + 1);
+					putchar(';');
+					putchar('\n');
+				}
+				for (int i = 0; i < indentation; i++) {
+					putchar('\t');
+				}
+				putchar('}');
+			};
 			break;
 	}
 }
@@ -975,6 +1010,8 @@ Stack* tokenise(String *script, Stack **heap) {
 							o->type = OPERATION_SUBG;
 						} else if (String_is(current_value, "</")) {
 							o->type = OPERATION_SUBL;
+						} else if (String_is(current_value, ".")) {
+							o->type = OPERATION_ACCESS;
 						}
 
 						new_token->value = o;
@@ -1231,7 +1268,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 								if ((writing || printing) && to_print->type == ELEMENT_STRING) {
 									String_print(to_print->value);
 								} else {
-									Element_print(to_print);
+									Element_print(to_print, 0);
 								}
 
 								if ((showing || displaying) && x < statement->length - 1) {
@@ -1369,6 +1406,36 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					}
 
+					if (!handled && String_is(command->value, "each")) {
+						handled = true;
+
+						if (statement->length != 3) {
+							bruh("'each' command accepts exactly 2 arguments");
+						}
+
+						Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap);
+
+						if (subject->type != ELEMENT_SCOPE) {
+							bruh("first argument of 'each' command must be a Scope object");
+						}
+
+						Element *function = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap);
+
+						Scope *s = subject->value;
+
+						for (size_t i = 0; i < s->length; i++) {
+							if (s->maps[i].key->type == ELEMENT_VARIABLE) {
+								continue;
+							}
+
+							evaluate_expression(make(ELEMENT_OPERATION, Operation_new(
+											OPERATION_APPLICATION,
+											function,
+											s->maps[i].key), heap
+										), ast_root, scopes_stack, heap);
+						}
+					}
+
 					if (!handled && String_is(command->value, "bruh")) {
 						handled = true;
 
@@ -1396,56 +1463,69 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 			{
 				Operation *o = e->value;
 
-				Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
-				Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
-
 				switch (o->type) {
 					case OPERATION_APPLICATION:
-						switch (a->type) {
-							case ELEMENT_CLOSURE:
-								{
-									Closure *c = a->value;
+						{
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
 
-									Stack *scopes = c->scopes->value;
+							switch (a->type) {
+								case ELEMENT_CLOSURE:
+									{
+										Closure *c = a->value;
 
-									Element *new_scopes = make(ELEMENT_SCOPE_COLLECTION, Stack_new(), heap);
+										Stack *scopes = c->scopes->value;
 
-									for (size_t i = 0; i < scopes->length; i++) {
-										new_scopes->value = Stack_push(new_scopes->value, scopes->content[i]);
-									}
+										Element *new_scopes = make(ELEMENT_SCOPE_COLLECTION, Stack_new(), heap);
 
-									if (c->variable != NULL) {
-										Element *scope = make(ELEMENT_SCOPE, Scope_new(), heap);
+										for (size_t i = 0; i < scopes->length; i++) {
+											new_scopes->value = Stack_push(new_scopes->value, scopes->content[i]);
+										}
 
-										new_scopes->value = Stack_push(new_scopes->value, scope);
+										if (c->variable != NULL) {
+											Element *scope = make(ELEMENT_SCOPE, Scope_new(), heap);
 
-										scope->value = Scope_set(scope->value, c->variable, b);
-									}
+											new_scopes->value = Stack_push(new_scopes->value, scope);
 
-									*scopes_stack = Stack_push(*scopes_stack, new_scopes);
+											scope->value = Scope_set(scope->value, c->variable, b);
+										}
 
-									Element *result = evaluate_expression(c->expression, ast_root, scopes_stack, heap);
+										*scopes_stack = Stack_push(*scopes_stack, new_scopes);
 
-									*scopes_stack = Stack_pop(*scopes_stack);
+										Element *result = evaluate_expression(c->expression, ast_root, scopes_stack, heap);
 
-									return result;
-								};
-							case ELEMENT_NUMBER:
-								return make(ELEMENT_NUMBER, Number_operate(OPERATION_MULTIPLICATION, a->value, b->value), heap);
-							case ELEMENT_SCOPE:
-								{
-									Element *result = Scope_get(a->value, b);
-									if (result == NULL) {
-										bruh("no such key in scope");
-									}
-									return Scope_get(a->value, b);
-								};
-							default:
-								bruh("application cannot be applied to this type");
-						}
+										*scopes_stack = Stack_pop(*scopes_stack);
+
+										return result;
+									};
+								case ELEMENT_NUMBER:
+									return make(ELEMENT_NUMBER, Number_operate(OPERATION_MULTIPLICATION, a->value, b->value), heap);
+								case ELEMENT_SCOPE:
+									{
+										Element *result = Scope_get(a->value, b);
+										if (result == NULL) {
+											bruh("no such key in scope");
+										}
+										return Scope_get(a->value, b);
+									};
+								default:
+									bruh("application cannot be applied to this type");
+							}
+						};
+					case OPERATION_ACCESS:
+						{
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+
+							Element *result = Scope_get(a->value, o->b);
+
+							return result;
+						};
 					case OPERATION_EQUALITY:
 					case OPERATION_INEQUALITY:
 						{
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+
 							Number *n = Number_new();
 							n->value_long = (Element_compare(a, b) != (o->type == OPERATION_INEQUALITY)) ? 1 : 0;
 							return make(ELEMENT_NUMBER, n, heap);
@@ -1456,6 +1536,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_OR:
 					case OPERATION_XOR:
 						{
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+
 							if (a->type != ELEMENT_NUMBER || b->type != ELEMENT_NUMBER) {
 								bruh("only integers may be shifted, ANDed, ORed or XORed");
 							}
@@ -1494,6 +1577,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_DIVISION:
 					case OPERATION_REMAINDER:
 					case OPERATION_POW:
+						Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+						Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+
 						if (a->type != ELEMENT_NUMBER || b->type != ELEMENT_NUMBER) {
 							bruh("numeric operation applied to non-numeric value");
 						}
@@ -1501,6 +1587,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 					case OPERATION_SUBL:
 					case OPERATION_SUBG:
 						{
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+
 							if (a->type != ELEMENT_STRING || b->type != ELEMENT_NUMBER) {
 								bruh("substring operations must be applied to a string and a number in that order");
 							}
@@ -1541,6 +1630,9 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						};
 					case OPERATION_CONCATENATION:
 						{
+							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap);
+							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap);
+
 							if (a->type != ELEMENT_STRING || b->type != ELEMENT_STRING) {
 								bruh("string concatenation applied to non-string value");
 							}
@@ -1596,7 +1688,7 @@ Element* eval(String *script, Element *scopes) {
 	/*
 	putchar('\n');
 	for (size_t i = 0; i < tokens->length; i++) {
-		Element_print(tokens->content[i]);
+		Element_print(tokens->content[i], 0);
 	}
 	putchar('\n');
 	putchar('\n');
@@ -1611,7 +1703,7 @@ Element* eval(String *script, Element *scopes) {
 	free(tokens);
 
 	/*
-	Element_print(ast_root);
+	Element_print(ast_root, 0);
 	putchar('\n');
 	putchar('\n');
 	*/

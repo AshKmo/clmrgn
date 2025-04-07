@@ -3,3 +3,6 @@ bin/clmrgn : main.c
 
 clean :
 	rm -f bin/clmrgn
+
+debug : main.c
+	gcc -o bin/clmrgn -g -lm main.c
