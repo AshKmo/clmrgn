@@ -1479,7 +1479,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							bruh("first argument of 'each' command must be a Scope object");
 						}
 
-						Element *function = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
+						Element *closure = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
 
 						Scope *s = subject->value;
 
@@ -1488,7 +1488,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 								continue;
 							}
 
-							apply(function, s->maps[i].key, ast_root, scopes_stack, heap, call_stack);
+							apply(closure, s->maps[i].key, ast_root, scopes_stack, heap, call_stack);
 						}
 					}
 
