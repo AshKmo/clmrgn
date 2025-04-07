@@ -410,6 +410,9 @@ void Element_print(Element *e, int indentation) {
 				switch (o->type) {
 					case OPERATION_APPLICATION:
 						break;
+					case OPERATION_ACCESS:
+						putchar('.');
+						break;
 					case OPERATION_MULTIPLICATION:
 						putchar('*');
 						break;
@@ -428,8 +431,11 @@ void Element_print(Element *e, int indentation) {
 					case OPERATION_EQUALITY:
 						fputs("==", stdout);
 						break;
+					case OPERATION_INEQUALITY:
+						fputs("!=", stdout);
+						break;
 					case OPERATION_REMAINDER:
-						fputs("%", stdout);
+						putchar('%');
 						break;
 					case OPERATION_LT:
 						fputs("<", stdout);
@@ -445,6 +451,30 @@ void Element_print(Element *e, int indentation) {
 						break;
 					case OPERATION_POW:
 						fputs("**", stdout);
+						break;
+					case OPERATION_SUBL:
+						fputs("</", stdout);
+						break;
+					case OPERATION_SUBG:
+						fputs(">/", stdout);
+						break;
+					case OPERATION_CLOSURE:
+						fputs("=>", stdout);
+						break;
+					case OPERATION_SHIFT_LEFT:
+						fputs("<<", stdout);
+						break;
+					case OPERATION_SHIFT_RIGHT:
+						fputs(">>", stdout);
+						break;
+					case OPERATION_AND:
+						fputs("&", stdout);
+						break;
+					case OPERATION_OR:
+						fputs("|", stdout);
+						break;
+					case OPERATION_XOR:
+						fputs("^", stdout);
 						break;
 				}
 				if (o->b != NULL) {
@@ -534,6 +564,17 @@ void Element_print(Element *e, int indentation) {
 					putchar('\t');
 				}
 				putchar('}');
+			};
+			break;
+		case ELEMENT_CLOSURE:
+			{
+				Closure *c = e->value;
+
+				putchar('(');
+				Element_print(c->variable, indentation);
+				fputs(" => ", stdout);
+				Element_print(c->expression, indentation);
+				putchar(')');
 			};
 			break;
 	}
