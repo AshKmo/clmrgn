@@ -182,6 +182,7 @@ Closure* Closure_new(Element *expression, Element *variable, Element *scopes) {
 // TODO: add more operators
 typedef enum {
 	OPERATION_APPLICATION,
+	OPERATION_APPLICATION_INFIX,
 	OPERATION_ACCESS,
 	OPERATION_POW,
 	OPERATION_MULTIPLICATION,
@@ -206,7 +207,7 @@ typedef enum {
 	OPERATION_CLOSURE,
 } OperationType;
 
-const int OPERATION_PRECEDENCE[] = {0, 1, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 8, 8, 8, 9, 9, 10, 11, 12, 13};
+const int OPERATION_PRECEDENCE[] = {0, 1, 1, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 8, 8, 8, 9, 9, 10, 11, 12, 13};
 
 typedef struct Operation {
 	OperationType type;
@@ -947,6 +948,7 @@ Stack* tokenise(String *script, Stack **heap) {
 				case '|':
 				case '^':
 				case '!':
+				case '$':
 					new_type = ELEMENT_OPERATION;
 					break;
 				case '.':
@@ -1059,6 +1061,8 @@ Stack* tokenise(String *script, Stack **heap) {
 							o->type = OPERATION_ACCESS;
 						} else if (String_is(current_value, "=>")) {
 							o->type = OPERATION_CLOSURE;
+						} else if (String_is(current_value, "$")) {
+							o->type = OPERATION_APPLICATION_INFIX;
 						}
 
 						new_token->value = o;
@@ -1463,19 +1467,33 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						}
 					};
 
-					if (!handled && String_is(command->value, "mut")) {
-						handled = true;
+					if (!handled) {
+						bool mutating = !handled && String_is(command->value, "mut") && (handled = true);
+						bool setpropping = !handled && String_is(command->value, "setprop") && (handled = true);
 
-						if (statement->length != 4) {
-							bruh("'mut' command accepts exactly 3 arguments");
+						if (handled) {
+							if (statement->length != 4) {
+								if (mutating) {
+									bruh("'mut' command accepts exactly 3 arguments");
+								} else {
+									bruh("'setprop' command accepts exactly 3 arguments");
+								}
+							}
+
+							Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
+
+							Element *key;
+							if (mutating) {
+								key = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
+							} else {
+								key = statement->content[2];
+							}
+
+							Element *value = evaluate_expression(statement->content[3], ast_root, scopes_stack, heap, call_stack);
+
+							subject->value = Scope_set(subject->value, key, value);
 						}
-
-						Element *subject = evaluate_expression(statement->content[1], ast_root, scopes_stack, heap, call_stack);
-						Element *key = evaluate_expression(statement->content[2], ast_root, scopes_stack, heap, call_stack);
-						Element *value = evaluate_expression(statement->content[3], ast_root, scopes_stack, heap, call_stack);
-
-						subject->value = Scope_set(subject->value, key, value);
-					}
+					};
 
 					if (!handled && String_is(command->value, "if")) {
 						handled = true;
@@ -1551,6 +1569,10 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						exit(1);
 					}
 
+					if (!handled) {
+						bruh("command not recognised");
+					}
+
 					garbage_collect(NULL, ast_root, scopes_stack, heap, call_stack);
 				}
 
@@ -1565,6 +1587,7 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 
 				switch (o->type) {
 					case OPERATION_APPLICATION:
+					case OPERATION_APPLICATION_INFIX:
 						{
 							Element *a = evaluate_expression(o->a, ast_root, scopes_stack, heap, call_stack);
 							Element *b = evaluate_expression(o->b, ast_root, scopes_stack, heap, call_stack);
@@ -1712,18 +1735,32 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 							return make(ELEMENT_STRING, result, heap);
 						};
 					case OPERATION_CLOSURE:
-						return make(ELEMENT_CLOSURE, Closure_new(o->b, o->a, scopes), heap);
+						{
+							Stack *old_scopes = scopes->value;
+							Stack *new_scopes = Stack_new();
+							for (size_t i = 0; i < old_scopes->length; i++) {
+								new_scopes = Stack_push(new_scopes, old_scopes->content[i]);
+							}
+							Element *new_scopes_element = make(ELEMENT_SCOPE_COLLECTION, new_scopes, heap);
+
+							return make(ELEMENT_CLOSURE, Closure_new(o->b, o->a, new_scopes_element), heap);
+						};
 				}
 			};
 			break;
 		case ELEMENT_VARIABLE:
 			{
 				Stack *scope_list = scopes->value;
-				for (size_t i = 0; i < scope_list->length; i++) {
+				for (size_t i = scope_list->length - 1; ; i--) {
 					Element *scope_element = scope_list->content[i];
 					Element *result = Scope_get(scope_element->value, e);
+
 					if (result != NULL) {
 						return result;
+					}
+
+					if (i == 0) {
+						break;
 					}
 				}
 
@@ -1734,7 +1771,15 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 		case ELEMENT_FUNCTION:
 			{
 				Function *f = e->value;
-				return make(ELEMENT_CLOSURE, Closure_new(f->expression, f->variable, scopes), heap);
+
+				Stack *old_scopes = scopes->value;
+				Stack *new_scopes = Stack_new();
+				for (size_t i = 0; i < old_scopes->length; i++) {
+					new_scopes = Stack_push(new_scopes, old_scopes->content[i]);
+				}
+				Element *new_scopes_element = make(ELEMENT_SCOPE_COLLECTION, new_scopes, heap);
+
+				return make(ELEMENT_CLOSURE, Closure_new(f->expression, f->variable, new_scopes_element), heap);
 			};
 		default:
 			return e;
