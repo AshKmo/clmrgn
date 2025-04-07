@@ -577,6 +577,9 @@ void Element_print(Element *e, int indentation) {
 				putchar(')');
 			};
 			break;
+		default:
+			printf("[ElementType %d]", e->type);
+			break;
 	}
 }
 
