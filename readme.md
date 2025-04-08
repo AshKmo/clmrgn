@@ -58,6 +58,7 @@ Accepts at least three arguments:
 - The name of a new closure to create
 - The names of any arguments that are to be passed to the closure
 - An expression to evaluate using arguments passed to the closure
+
 This command then adds the function to the current scope under the specified name.
 
 #### `let`
