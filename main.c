@@ -1411,6 +1411,33 @@ Element* evaluate_expression(Element *e, Element *ast_root, Stack **scopes_stack
 						return result;
 					}
 
+					if (!handled && String_is(command->value, "gets")) {
+						handled = true;
+
+						if (statement->length != 1) {
+							bruh("'gets' command accepts no arguments");
+						}
+
+						char *buffer = NULL;
+						size_t alloc_length = 0;
+
+						size_t length = getline(&buffer, &alloc_length, stdin) - 1;
+
+						String *final_string = String_new(length);
+
+						for (size_t i = 0; i < length; i++) {
+							final_string->content[i] = buffer[i];
+						}
+
+						free(buffer);
+
+						Element *result = make(ELEMENT_STRING, final_string, heap);
+
+						scopes->value = Stack_pop(scopes->value);
+
+						return result;
+					}
+
 					if (!handled && String_is(command->value, "eval")) {
 						handled = true;
 

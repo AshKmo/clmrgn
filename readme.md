@@ -50,6 +50,9 @@ Accepts any number of expressions and writes the results to the console, separat
 #### `return`
 Exits the current Sequence and causes the Sequence's evaluation to return the specified value. Accepts only one expression.
 
+#### `gets`
+Exits the current Sequence and causes the Sequence's evaluation to return a String containing text entered by the user. Accepts only one expression.
+
 #### `eval`
 Accepts only one expression that evaluates to a String. The String will then be interpreted as a clmrgn script that is then evaluated. Afterward, the current Sequence is exited and the Sequence's evaluation will return the value returned by the evaluation of the new script.
 

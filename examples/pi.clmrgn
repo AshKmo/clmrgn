@@ -1,3 +1,11 @@
+#
+	pi.clmrgn
+
+	Calculates the value of Pi by integrating a semicircle function using the left-point estimate.
+
+	Written by Ashley Kollmorgen, 2025.
+#
+
 function pi precision {
 	let area 0;
 
