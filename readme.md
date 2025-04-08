@@ -26,7 +26,9 @@ let x "Hello, world!";
 print x;
 ```
 
-Each statement must start with a command name end with a semicolon. You may pass whitespace-separated arguments to a command, but keep in mind that any operations or other non-trivial expressions must be contained within parentheses to count as a single argument.
+Each statement must start with a command name end with a semicolon. You may pass whitespace-separated arguments to a command, but keep in mind that any operations or other non-trivial expressions must be contained within parentheses to count as a single argument. By default, a Sequence, when evaluated, will return the Scope object that it generates to store its properties and variables in, although this can be overridden with certain commands.
+
+A Sequence can also be used as part of an expression by enclosing it in braces.
 
 The list of valid commands is as follows:
 
