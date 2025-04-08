@@ -9,6 +9,15 @@ You should now be able to run `./bin/clmrgn <script>.clmrgn` to evaluate a clmrg
 To evaluate the pi calculation example script, run `./bin/clmrgn examples/pi.clmrgn`.
 
 ## Docco
+
+### Data types
+An element can be one of the following types:
+- Null (`?`): a single value that is different from any other value of any other type
+- String (`"Hello, world!"`): a string of characters
+- Number (`-12.4`): a number stored as a long int or a double
+- Scope (`{let "three" 3;}`): a list of key/value pairs
+- Closure (`(x => x * 4)`): a function that contains the scopes in the code surrounding it
+
 ### Sequence commands
 A clmrgn script starts as a Sequence, which contains a series of statements starting with a command:
 
@@ -17,7 +26,9 @@ let x "Hello, world!";
 print x;
 ```
 
-Each statement must start with a command name end with a semicolon. The list of valid commands are as follows:
+Each statement must start with a command name end with a semicolon. You may pass whitespace-separated arguments to a command, but keep in mind that any operations or other non-trivial expressions must be contained within parentheses to count as a single argument.
+
+The list of valid commands is as follows:
 
 #### `do`
 Accepts any number of expressions and evaluates all of them.
@@ -89,3 +100,39 @@ Accepts two arguments. The second argument will be applied to all non-property-l
 
 #### `bruh`
 Accepts one argument that evaluates to a String. The interpreter will print the contents of this string to the console and immediately exit with code 1, leaving the OS to deal with any rubbish it leaves in memory.
+
+### Operators
+All operators are infix except for application by juxtaposition, which, as the name suggests, is applied by juxtaposition.
+
+#### Application by juxtaposition
+Two values can be juxtaposed to apply the second to the first. The result depends on the type of the evaluation of the first argument:
+- If it is a Closure, the Closure is evaluated with its variable set to the evaluation of the second argument
+- If it is a Number, the Number is multiplied with the Number returned by the evaluation of the second argument
+- If it is a Scope, the value associated with the key matching the evaluation of the second argument is returned
+
+#### `$`
+Does the same as application by juxtaposition but is an infix operator with a lower precedence.
+
+#### `.`
+Returns the value associated with the key matching the second argument in the Scope that the first argument evaluates to.
+
+#### `**`
+Raises the Number that the first argument evaluates to, to the power of the Number that the second argument evaluates to.
+
+#### `*`, `/`, `%`, `+`, `-`, `<<`, `>>`
+Pretty obvious, except that `-` must have two operands.
+
+#### `</`
+Returns the portion of the String that the first argument evaluates to, that contains the first (n) characters, where 'n' is the value of the integer Number returned by the evaluation of the second argument.
+
+#### `>/`
+Returns the portion of the String that the first argument evaluates to, that does not contain the first (n-1) characters, where 'n' is the value of the integer Number returned by the evaluation of the second argument.
+
+#### `..`
+Concatenates the evaluation of the two arguments, which should both be Strings.
+
+#### `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `|`, `^`
+Pretty obvious, although keep in mind that `&`, `|` and `^` are bitwise operators.
+
+#### `=>`
+Returns a Closure that contains the expression specified in the second argument and that accepts an argument that can be accessed using the key specified in the first argument.
